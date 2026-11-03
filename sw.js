@@ -1,9 +1,12 @@
-// Caches the app shell so it opens offline. Bump VERSION after changing files.
-const VERSION = 'v3';
+// Caches the app shell so it opens offline. Bump VERSION (and ?v= in index.html) after changing files.
+const VERSION = 'v4';
 const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
+  // cache: 'reload' skips the browser's HTTP cache, so a new page never gets paired with an old script
+  e.waitUntil(caches.open(VERSION)
+    .then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -14,13 +17,14 @@ self.addEventListener('activate', e => {
   );
 });
 
-// Network first, fall back to cache when offline
+// Network first (revalidating with the server), fall back to cache when offline
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
+  const sameOrigin = new URL(e.request.url).origin === location.origin;
   e.respondWith(
-    fetch(e.request)
+    fetch(sameOrigin ? new Request(e.request.url, { cache: 'no-cache' }) : e.request)
       .then(res => {
-        if (res.ok && new URL(e.request.url).origin === location.origin) {
+        if (res.ok && sameOrigin) {
           const copy = res.clone();
           caches.open(VERSION).then(c => c.put(e.request, copy));
         }
