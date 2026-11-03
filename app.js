@@ -567,14 +567,19 @@ function openSheet(exp, opts = {}) {
   setSheetType(exp?.inc ? 'in' : 'out');
   $('backdrop').classList.add('open');
   $('sheet').classList.add('open');
+  openLayer('sheet');
   if (!exp) setTimeout(() => $('fAmount').focus(), 260);
 }
 // Keep the currency sign right next to the number
 function fitAmount() { $('fAmount').style.width = (Math.max(1, $('fAmount').value.length) + 0.5) + 'ch'; }
-function closeSheet() {
+function hideSheet() {
   $('backdrop').classList.remove('open');
   $('sheet').classList.remove('open');
   document.activeElement?.blur();
+}
+function closeSheet() {
+  hideSheet();
+  dropLayers('sheet');
 }
 function renderCatPicker() {
   $('fCats').classList.toggle('three', sheetType === 'in'); // 6 income sources → even 3×2 grid
@@ -744,10 +749,10 @@ $('photoInput').onchange = async e => {
 };
 $('photoBox').onclick = e => {
   const act = e.target.closest('[data-photo]')?.dataset.photo;
-  if (act === 'view') { $('viewerImg').src = sheetPhoto.url; $('viewer').hidden = false; }
+  if (act === 'view') { $('viewerImg').src = sheetPhoto.url; $('viewer').hidden = false; openLayer('viewer'); }
   if (act === 'remove') setSheetPhoto(null, true);
 };
-$('viewer').onclick = () => { $('viewer').hidden = true; };
+$('viewer').onclick = () => { $('viewer').hidden = true; dropLayers('viewer'); };
 $('days').onclick = e => {
   const b = e.target.closest('[data-id]');
   if (b) openSheet(state.expenses.find(x => x.id === b.dataset.id));
@@ -773,7 +778,12 @@ $('del').onclick = () => {
 $('q').addEventListener('input', () => { filters.q = $('q').value; renderHome(); });
 $('q').addEventListener('keydown', e => { if (e.key === 'Enter') $('q').blur(); });
 $('qClear').onclick = e => { e.preventDefault(); $('q').value = filters.q = ''; renderHome(); };
-$('filterBtn').onclick = () => { $('filters').hidden = !$('filters').hidden; renderSearchControls(); };
+$('filterBtn').onclick = () => {
+  const open = $('filters').hidden;
+  $('filters').hidden = !open;
+  if (open) openLayer('filters'); else dropLayers('filters');
+  renderSearchControls();
+};
 $('fType').onclick = e => { const b = e.target.closest('[data-v]'); if (b) { filters.type = b.dataset.v; renderHome(); } };
 $('fPeriod').onclick = e => { const b = e.target.closest('[data-v]'); if (b) { filters.period = b.dataset.v; renderHome(); } };
 $('fCat').onchange = () => { filters.cat = $('fCat').value; renderHome(); };
@@ -820,9 +830,48 @@ function updateLeftBtn() {
   b.setAttribute('aria-label', inSettings ? 'Назад' : 'Заблокувати');
   b.firstElementChild.firstElementChild.setAttribute('href', inSettings ? '#i-left' : '#i-lock');
 }
-document.querySelectorAll('.tab').forEach(t => t.onclick = () => showView(t.dataset.view));
-$('settingsBtn').onclick = () => showView('settings');
-$('leftBtn').onclick = () => currentView === 'settings' ? showView(lastTab) : lock();
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => goView(t.dataset.view));
+$('settingsBtn').onclick = () => goView('settings');
+$('leftBtn').onclick = () => currentView === 'settings' ? goView(lastTab) : lock();
+
+// ---------- Phone "back" gesture ----------
+// Every open layer (form, photo, filters, stats, settings) owns a history entry, so the system back
+// gesture closes the top layer instead of leaving the app. Back on the home screen exits as usual.
+const layers = [];
+let ignorePops = 0;
+function openLayer(name) {
+  if (layers.includes(name)) return;
+  layers.push(name);
+  history.pushState({ layer: layers.length }, '');
+}
+// Called when a layer is closed from the UI: drop its history entries without re-running the close
+function dropLayers(...names) {
+  let n = 0;
+  while (layers.length && names.includes(layers[layers.length - 1])) { layers.pop(); n++; }
+  names.forEach(name => { const i = layers.indexOf(name); if (i >= 0) layers.splice(i, 1); });
+  if (n) { ignorePops++; history.go(-n); }
+}
+function hideLayer(name) {
+  if (name === 'sheet') hideSheet();
+  if (name === 'viewer') $('viewer').hidden = true;
+  if (name === 'filters') { $('filters').hidden = true; renderSearchControls(); }
+  if (name === 'settings') showView(layers.includes('stats') ? 'stats' : 'home');
+  if (name === 'stats') showView('home');
+}
+window.addEventListener('popstate', () => {
+  if (ignorePops) { ignorePops--; return; }
+  const name = layers.pop();
+  if (name) hideLayer(name);
+});
+function goView(view) {
+  if (view === currentView) return;
+  if (view === 'home') dropLayers('settings', 'stats');
+  else if (view === 'settings') openLayer('settings');
+  else if (layers.includes('stats')) dropLayers('settings'); // settings → back down to stats
+  else if (layers[layers.length - 1] === 'settings') layers[layers.length - 1] = 'stats'; // reuse the entry
+  else openLayer('stats');
+  showView(view);
+}
 
 $('budget').onchange = () => { state.settings.budget = Math.max(0, Number($('budget').value) || 0); save(); render(); };
 $('currency').onchange = () => { state.settings.currency = $('currency').value; save(); render(); };
