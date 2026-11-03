@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Витрати">
+<title>Витрати</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --text: #16181d; --muted: #6b7280;
+    --line: #e5e7eb; --accent: #0f766e; --accent-soft: #ccfbf1; --danger: #dc2626;
+    --radius: 16px; --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0f12; --card: #171a1f; --text: #f1f2f4; --muted: #9aa1ac;
+      --line: #262a31; --accent: #2dd4bf; --accent-soft: #123a36; --danger: #f87171;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { padding: env(safe-area-inset-top) 0 calc(76px + env(safe-area-inset-bottom)); }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+  input, select { font: inherit; color: var(--text); }
+  .wrap { max-width: 560px; margin: 0 auto; padding: 0 16px; }
+
+  header { display: flex; align-items: center; justify-content: space-between; padding: 14px 0 6px; }
+  .month-nav { display: flex; align-items: center; gap: 4px; }
+  .month-nav button { width: 36px; height: 36px; border-radius: 50%; font-size: 20px; color: var(--muted); }
+  .month-nav button:active { background: var(--line); }
+  .month-title { font-weight: 650; font-size: 18px; min-width: 150px; text-align: center; text-transform: capitalize; }
+
+  .card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; margin: 12px 0; }
+  .total-label { color: var(--muted); font-size: 14px; }
+  .total { font-size: 36px; font-weight: 700; letter-spacing: -.02em; margin: 2px 0 6px; font-variant-numeric: tabular-nums; }
+  .sub { color: var(--muted); font-size: 14px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .bar { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; margin-top: 12px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; transition: width .3s; }
+  .bar.over > i { background: var(--danger); }
+
+  .day { margin-top: 18px; }
+  .day-head { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; padding: 0 4px 6px; }
+  .list { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+  .item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; width: 100%; text-align: left; }
+  .item + .item { border-top: 1px solid var(--line); }
+  .item:active { background: var(--bg); }
+  .emoji { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; font-size: 20px; flex: none; }
+  .item .meta { flex: 1; min-width: 0; }
+  .item .name { font-weight: 550; }
+  .item .note { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item .amt { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
+  .empty div { font-size: 44px; margin-bottom: 8px; }
+
+  .stat-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
+  .stat-row + .stat-row { border-top: 1px solid var(--line); }
+  .stat-row .meta { flex: 1; min-width: 0; }
+  .stat-row .top { display: flex; justify-content: space-between; gap: 8px; }
+  .stat-row .pct { color: var(--muted); font-size: 13px; }
+  .stat-row .bar { margin-top: 6px; height: 6px; }
+  .donut-wrap { display: flex; justify-content: center; padding: 8px 0 4px; }
+
+  h2 { font-size: 15px; color: var(--muted); font-weight: 600; margin: 22px 4px 0; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row input, .row select { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 8px 10px; width: 130px; text-align: right; }
+  .btn { display: block; width: 100%; padding: 13px; border-radius: 12px; background: var(--bg); font-weight: 550; text-align: center; }
+  .btn + .btn { margin-top: 8px; }
+  .btn.primary { background: var(--accent); color: #fff; }
+  @media (prefers-color-scheme: dark) { .btn.primary { color: #04201d; } }
+  .btn.danger { color: var(--danger); }
+  .hint { color: var(--muted); font-size: 13px; margin: 8px 4px 0; }
+
+  nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line);
+    padding-bottom: env(safe-area-inset-bottom); z-index: 5; }
+  nav.tabs .wrap { display: flex; justify-content: space-around; align-items: center; height: 64px; }
+  nav.tabs button.tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; color: var(--muted); padding: 6px 0; }
+  nav.tabs button.tab span { font-size: 20px; filter: grayscale(1); opacity: .7; }
+  nav.tabs button.tab.on { color: var(--accent); font-weight: 600; }
+  nav.tabs button.tab.on span { filter: none; opacity: 1; }
+  .fab { width: 56px; height: 56px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 30px; line-height: 1;
+    box-shadow: 0 6px 18px rgba(15,118,110,.4); margin-top: -26px; flex: none; }
+  @media (prefers-color-scheme: dark) { .fab { color: #04201d; } }
+
+  /* Bottom sheet */
+  .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.4); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 10; }
+  .backdrop.open { opacity: 1; pointer-events: auto; }
+  .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 11; background: var(--card); border-radius: 20px 20px 0 0;
+    transform: translateY(105%); transition: transform .25s ease; max-height: 92vh; overflow-y: auto;
+    padding: 8px 16px calc(16px + env(safe-area-inset-bottom)); }
+  .sheet.open { transform: none; }
+  .sheet .inner { max-width: 560px; margin: 0 auto; }
+  .grabber { width: 40px; height: 5px; border-radius: 99px; background: var(--line); margin: 4px auto 10px; }
+  .sheet-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .sheet-title b { font-size: 18px; }
+  .amount-input { display: flex; align-items: baseline; justify-content: center; gap: 6px; padding: 8px 0 14px; }
+  .amount-input input { border: 0; background: none; font-size: 44px; font-weight: 700; width: 2ch; max-width: 80%; text-align: center; outline: none; font-variant-numeric: tabular-nums; }
+  .amount-input .cur { font-size: 28px; color: var(--muted); font-weight: 600; }
+  .cats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; }
+  .cat { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 2px; border-radius: 12px; font-size: 12px; border: 2px solid transparent; background: var(--bg); }
+  .cat .e { font-size: 22px; }
+  .cat.on { border-color: var(--accent); background: var(--accent-soft); }
+  .field { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .field input { width: 100%; min-width: 0; border: 1px solid var(--line); background: var(--bg); border-radius: 12px; padding: 12px; }
+
+  .cat-edit { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
+  .cat-edit + .cat-edit { border-top: 1px solid var(--line); }
+  .cat-edit .nm { flex: 1; }
+  .cat-edit button { color: var(--danger); font-size: 14px; padding: 6px 8px; }
+  .add-cat { display: flex; gap: 8px; margin-top: 10px; }
+  .add-cat input { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 10px; min-width: 0; }
+  .add-cat input.em { width: 56px; text-align: center; }
+  .add-cat input.nm { flex: 1; }
+  .add-cat button { padding: 0 14px; border-radius: 10px; background: var(--accent); color: #fff; font-weight: 600; }
+
+  .toast { position: fixed; left: 50%; bottom: calc(90px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(20px);
+    background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; opacity: 0; transition: .2s; z-index: 20; pointer-events: none; }
+  .toast.show { opacity: 1; transform: translateX(-50%); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="month-nav">
+      <button id="prev" aria-label="Попередній місяць">‹</button>
+      <div class="month-title" id="monthTitle"></div>
+      <button id="next" aria-label="Наступний місяць">›</button>
+    </div>
+  </header>
+
+  <!-- Головна -->
+  <section id="view-home">
+    <div class="card">
+      <div class="total-label">Витрачено за місяць</div>
+      <div class="total" id="total"></div>
+      <div class="sub" id="summarySub"></div>
+      <div class="bar" id="budgetBar" hidden><i></i></div>
+    </div>
+    <div id="days"></div>
+  </section>
+
+  <!-- Статистика -->
+  <section id="view-stats" hidden>
+    <div class="card">
+      <div class="donut-wrap" id="donut"></div>
+      <div id="statList"></div>
+    </div>
+  </section>
+
+  <!-- Налаштування -->
+  <section id="view-settings" hidden>
+    <h2>Загальне</h2>
+    <div class="card">
+      <div class="row"><label for="budget">Бюджет на місяць</label><input id="budget" type="number" inputmode="decimal" min="0" placeholder="0"></div>
+      <div class="row"><label for="currency">Валюта</label>
+        <select id="currency"><option>₴</option><option>$</option><option>€</option><option>zł</option><option>£</option></select>
+      </div>
+    </div>
+
+    <h2>Категорії</h2>
+    <div class="card">
+      <div id="catEditList"></div>
+      <div class="add-cat">
+        <input class="em" id="newCatEmoji" maxlength="4" placeholder="🙂">
+        <input class="nm" id="newCatName" maxlength="20" placeholder="Нова категорія">
+        <button id="addCat">+</button>
+      </div>
+    </div>
+
+    <h2>Дані</h2>
+    <div class="card">
+      <button class="btn" id="exportJson">💾 Зберегти резервну копію</button>
+      <button class="btn" id="exportCsv">📄 Експорт у CSV (Excel)</button>
+      <button class="btn" id="importBtn">📥 Відновити з копії</button>
+      <input type="file" id="importFile" accept="application/json,.json" hidden>
+      <button class="btn danger" id="wipe">Видалити всі дані</button>
+    </div>
+    <p class="hint">Усі дані зберігаються лише на цьому телефоні — без реклами, акаунтів і серверів. Час від часу робіть резервну копію.</p>
+  </section>
+</div>
+
+<nav class="tabs">
+  <div class="wrap">
+    <button class="tab on" data-view="home"><span>📋</span>Витрати</button>
+    <button class="tab" data-view="stats"><span>📊</span>Статистика</button>
+    <button class="fab" id="addBtn" aria-label="Додати витрату">+</button>
+    <button class="tab" data-view="settings"><span>⚙️</span>Налаштування</button>
+  </div>
+</nav>
+
+<div class="backdrop" id="backdrop"></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true">
+  <div class="inner">
+    <div class="grabber"></div>
+    <div class="sheet-title"><b id="sheetTitle">Нова витрата</b><button id="closeSheet" aria-label="Закрити" style="font-size:22px;color:var(--muted)">✕</button></div>
+    <div class="amount-input">
+      <input id="fAmount" type="text" inputmode="decimal" placeholder="0" autocomplete="off">
+      <span class="cur" id="fCur">₴</span>
+    </div>
+    <div class="cats" id="fCats"></div>
+    <div class="field">
+      <input id="fNote" type="text" placeholder="Коментар (необов'язково)" maxlength="80">
+      <input id="fDate" type="date">
+    </div>
+    <button class="btn primary" id="save">Зберегти</button>
+    <button class="btn danger" id="del" hidden>Видалити</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const KEY = 'expense-tracker-v1';
+const PALETTE = ['#f59e0b','#3b82f6','#10b981','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#6366f1','#84cc16','#06b6d4','#a855f7'];
+const DEFAULT_CATS = [
+  ['🛒','Продукти'], ['🍔','Кафе'], ['🚌','Транспорт'], ['🏠','Житло'],
+  ['💡','Комуналка'], ['📱','Звʼязок'], ['💊','Здоровʼя'], ['👕','Одяг'],
+  ['🎉','Розваги'], ['🎁','Подарунки'], ['📚','Навчання'], ['📦','Інше'],
+];
+
+let state = load();
+let viewMonth = monthKey(new Date());
+let editingId = null;
+let selectedCat = null;
+
+function load() {
+  try {
+    const s = JSON.parse(localStorage.getItem(KEY));
+    if (s && Array.isArray(s.expenses)) return s;
+  } catch {}
+  return {
+    expenses: [],
+    cats: DEFAULT_CATS.map(([emoji, name], i) => ({ id: 'c' + i, emoji, name, color: PALETTE[i % PALETTE.length] })),
+    settings: { currency: '₴', budget: 0 },
+  };
+}
+function save() {
+  localStorage.setItem(KEY, JSON.stringify(state));
+}
+
+const $ = id => document.getElementById(id);
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+function pad(n) { return String(n).padStart(2, '0'); }
+function monthKey(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1); }
+function today() { const d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+function money(n) {
+  const s = n.toLocaleString('uk-UA', { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 });
+  return s + ' ' + state.settings.currency;
+}
+function catById(id) { return state.cats.find(c => c.id === id) || { emoji: '❔', name: 'Без категорії', color: '#9ca3af' }; }
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]); }
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 1800); }
+
+function monthExpenses() { return state.expenses.filter(e => e.date.startsWith(viewMonth)); }
+
+function shiftMonth(delta) {
+  const [y, m] = viewMonth.split('-').map(Number);
+  viewMonth = monthKey(new Date(y, m - 1 + delta, 1));
+  render();
+}
+
+// ---------- Rendering ----------
+function render() {
+  const [y, m] = viewMonth.split('-').map(Number);
+  $('monthTitle').textContent = new Date(y, m - 1, 1).toLocaleDateString('uk-UA', { month: 'long', year: 'numeric' }).replace(/\s*р\.$/, '');
+  renderHome();
+  renderStats();
+}
+
+function renderHome() {
+  const list = monthExpenses();
+  const total = list.reduce((s, e) => s + e.amount, 0);
+  $('total').textContent = money(total);
+
+  const [y, m] = viewMonth.split('-').map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const isCurrent = viewMonth === monthKey(new Date());
+  const daysPassed = isCurrent ? new Date().getDate() : daysInMonth;
+  const budget = Number(state.settings.budget) || 0;
+  const sub = [`${list.length} ${plural(list.length, 'запис', 'записи', 'записів')}`, `≈ ${money(Math.round(total / daysPassed))} / день`];
+  if (budget) {
+    const left = budget - total;
+    sub.push(left >= 0 ? `Залишок: ${money(left)}` : `Перевищено на ${money(-left)}`);
+    $('budgetBar').hidden = false;
+    $('budgetBar').classList.toggle('over', left < 0);
+    $('budgetBar').firstElementChild.style.width = Math.min(100, total / budget * 100) + '%';
+  } else {
+    $('budgetBar').hidden = true;
+  }
+  $('summarySub').innerHTML = sub.map(s => `<span>${esc(s)}</span>`).join('');
+
+  if (!list.length) {
+    $('days').innerHTML = `<div class="empty"><div>🪙</div>Немає витрат за цей місяць.<br>Натисніть «+», щоб додати.</div>`;
+    return;
+  }
+  const byDay = {};
+  list.sort((a, b) => b.date.localeCompare(a.date) || b.ts - a.ts).forEach(e => (byDay[e.date] ||= []).push(e));
+  $('days').innerHTML = Object.entries(byDay).map(([date, items]) => {
+    const sum = items.reduce((s, e) => s + e.amount, 0);
+    return `<div class="day">
+      <div class="day-head"><span>${esc(dayLabel(date))}</span><span>${esc(money(sum))}</span></div>
+      <div class="list">${items.map(e => {
+        const c = catById(e.cat);
+        return `<button class="item" data-id="${e.id}">
+          <div class="emoji" style="background:${c.color}22">${esc(c.emoji)}</div>
+          <div class="meta"><div class="name">${esc(c.name)}</div>${e.note ? `<div class="note">${esc(e.note)}</div>` : ''}</div>
+          <div class="amt">−${esc(money(e.amount))}</div>
+        </button>`;
+      }).join('')}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderStats() {
+  const list = monthExpenses();
+  const total = list.reduce((s, e) => s + e.amount, 0);
+  if (!total) {
+    $('donut').innerHTML = '';
+    $('statList').innerHTML = `<div class="empty"><div>📊</div>Тут зʼявиться розподіл витрат по категоріях.</div>`;
+    return;
+  }
+  const sums = {};
+  list.forEach(e => sums[e.cat] = (sums[e.cat] || 0) + e.amount);
+  const rows = Object.entries(sums).sort((a, b) => b[1] - a[1]);
+
+  // Donut chart
+  const R = 70, C = 2 * Math.PI * R;
+  let offset = 0;
+  const arcs = rows.map(([id, v]) => {
+    const len = v / total * C;
+    const seg = `<circle r="${R}" cx="90" cy="90" fill="none" stroke="${catById(id).color}" stroke-width="22"
+      stroke-dasharray="${Math.max(len - (rows.length > 1 ? 2 : 0), 0.5)} ${C}" stroke-dashoffset="${-offset}" transform="rotate(-90 90 90)"/>`;
+    offset += len;
+    return seg;
+  }).join('');
+  $('donut').innerHTML = `<svg width="180" height="180" viewBox="0 0 180 180">${arcs}
+    <text x="90" y="86" text-anchor="middle" font-size="12" fill="var(--muted)">Разом</text>
+    <text x="90" y="106" text-anchor="middle" font-size="17" font-weight="700" fill="var(--text)">${esc(money(Math.round(total)))}</text></svg>`;
+
+  $('statList').innerHTML = rows.map(([id, v]) => {
+    const c = catById(id), p = v / total * 100;
+    return `<div class="stat-row">
+      <div class="emoji" style="background:${c.color}22">${esc(c.emoji)}</div>
+      <div class="meta">
+        <div class="top"><span>${esc(c.name)} <span class="pct">${p.toFixed(0)}%</span></span><b>${esc(money(v))}</b></div>
+        <div class="bar"><i style="width:${p}%;background:${c.color}"></i></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderSettings() {
+  $('budget').value = state.settings.budget || '';
+  $('currency').value = state.settings.currency;
+  $('catEditList').innerHTML = state.cats.map(c => `<div class="cat-edit">
+    <div class="emoji" style="background:${c.color}22;width:34px;height:34px;font-size:18px">${esc(c.emoji)}</div>
+    <div class="nm">${esc(c.name)}</div>
+    <button data-del-cat="${c.id}">Видалити</button>
+  </div>`).join('');
+}
+
+function dayLabel(date) {
+  const d = new Date(date + 'T00:00:00');
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  const diff = Math.round((t - d) / 86400000);
+  if (diff === 0) return 'Сьогодні';
+  if (diff === 1) return 'Вчора';
+  return d.toLocaleDateString('uk-UA', { weekday: 'long', day: 'numeric', month: 'long' });
+}
+function plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
+
+// ---------- Add / edit sheet ----------
+function openSheet(exp) {
+  editingId = exp ? exp.id : null;
+  $('sheetTitle').textContent = exp ? 'Редагувати' : 'Нова витрата';
+  $('fAmount').value = exp ? String(exp.amount).replace('.', ',') : '';
+  fitAmount();
+  $('fNote').value = exp ? exp.note : '';
+  const defaultDate = viewMonth === monthKey(new Date()) ? today() : viewMonth + '-01';
+  $('fDate').value = exp ? exp.date : defaultDate;
+  $('fCur').textContent = state.settings.currency;
+  selectedCat = exp ? exp.cat : (state.lastCat && state.cats.some(c => c.id === state.lastCat) ? state.lastCat : state.cats[0]?.id);
+  $('del').hidden = !exp;
+  renderCatPicker();
+  $('backdrop').classList.add('open');
+  $('sheet').classList.add('open');
+  if (!exp) setTimeout(() => $('fAmount').focus(), 260);
+}
+// Keep the currency sign right next to the number
+function fitAmount() { $('fAmount').style.width = (Math.max(1, $('fAmount').value.length) + 0.5) + 'ch'; }
+function closeSheet() {
+  $('backdrop').classList.remove('open');
+  $('sheet').classList.remove('open');
+  document.activeElement?.blur();
+}
+function renderCatPicker() {
+  $('fCats').innerHTML = state.cats.map(c => `<button class="cat ${c.id === selectedCat ? 'on' : ''}" data-cat="${c.id}">
+    <span class="e">${esc(c.emoji)}</span>${esc(c.name)}</button>`).join('');
+}
+
+function submit() {
+  const amount = Math.round(parseFloat($('fAmount').value.replace(/\s/g, '').replace(',', '.')) * 100) / 100;
+  if (!(amount > 0)) { toast('Введіть суму'); $('fAmount').focus(); return; }
+  if (!selectedCat) { toast('Оберіть категорію'); return; }
+  const data = { amount, cat: selectedCat, note: $('fNote').value.trim(), date: $('fDate').value || today() };
+  if (editingId) {
+    Object.assign(state.expenses.find(e => e.id === editingId), data);
+  } else {
+    state.expenses.push({ id: uid(), ts: Date.now(), ...data });
+  }
+  state.lastCat = selectedCat;
+  save();
+  viewMonth = data.date.slice(0, 7);
+  closeSheet();
+  render();
+  toast(editingId ? 'Збережено' : 'Додано ✓');
+}
+
+// ---------- Export / import ----------
+function download(name, content, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([content], { type }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function exportCsv() {
+  const q = s => '"' + String(s).replace(/"/g, '""') + '"';
+  const lines = [['Дата', 'Категорія', 'Сума', 'Коментар'].join(';')];
+  [...state.expenses].sort((a, b) => a.date.localeCompare(b.date)).forEach(e =>
+    lines.push([e.date, q(catById(e.cat).name), String(e.amount).replace('.', ','), q(e.note)].join(';')));
+  download(`vytraty-${today()}.csv`, '﻿' + lines.join('\n'), 'text/csv');
+}
+
+// ---------- Events ----------
+$('prev').onclick = () => shiftMonth(-1);
+$('next').onclick = () => shiftMonth(1);
+$('addBtn').onclick = () => openSheet();
+$('closeSheet').onclick = closeSheet;
+$('backdrop').onclick = closeSheet;
+$('save').onclick = submit;
+$('fAmount').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+$('fAmount').addEventListener('input', fitAmount);
+$('fNote').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+$('fCats').onclick = e => {
+  const b = e.target.closest('[data-cat]');
+  if (b) { selectedCat = b.dataset.cat; renderCatPicker(); }
+};
+$('days').onclick = e => {
+  const b = e.target.closest('[data-id]');
+  if (b) openSheet(state.expenses.find(x => x.id === b.dataset.id));
+};
+$('del').onclick = () => {
+  if (!confirm('Видалити цю витрату?')) return;
+  state.expenses = state.expenses.filter(e => e.id !== editingId);
+  save(); closeSheet(); render(); toast('Видалено');
+};
+
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
+  ['home', 'stats', 'settings'].forEach(v => $('view-' + v).hidden = v !== t.dataset.view);
+  document.querySelector('header').hidden = t.dataset.view === 'settings';
+  if (t.dataset.view === 'settings') renderSettings();
+  window.scrollTo(0, 0);
+});
+
+$('budget').onchange = () => { state.settings.budget = Math.max(0, Number($('budget').value) || 0); save(); render(); };
+$('currency').onchange = () => { state.settings.currency = $('currency').value; save(); render(); };
+
+$('addCat').onclick = () => {
+  const name = $('newCatName').value.trim();
+  if (!name) { toast('Введіть назву'); return; }
+  state.cats.push({ id: uid(), emoji: $('newCatEmoji').value.trim() || '🏷️', name, color: PALETTE[state.cats.length % PALETTE.length] });
+  $('newCatName').value = ''; $('newCatEmoji').value = '';
+  save(); renderSettings(); toast('Категорію додано');
+};
+$('catEditList').onclick = e => {
+  const b = e.target.closest('[data-del-cat]');
+  if (!b) return;
+  const id = b.dataset.delCat;
+  const used = state.expenses.filter(x => x.cat === id).length;
+  if (state.cats.length <= 1) { toast('Потрібна хоча б одна категорія'); return; }
+  if (used && !confirm(`Ця категорія використана в ${used} записах. Вони залишаться, але без категорії. Видалити?`)) return;
+  state.cats = state.cats.filter(c => c.id !== id);
+  save(); renderSettings(); render();
+};
+
+$('exportJson').onclick = () => download(`vytraty-backup-${today()}.json`, JSON.stringify(state, null, 2), 'application/json');
+$('exportCsv').onclick = exportCsv;
+$('importBtn').onclick = () => $('importFile').click();
+$('importFile').onchange = async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (!Array.isArray(data.expenses) || !Array.isArray(data.cats)) throw 0;
+    if (!confirm(`Відновити ${data.expenses.length} записів? Поточні дані буде замінено.`)) return;
+    state = data; save(); render(); renderSettings(); toast('Дані відновлено');
+  } catch { toast('Невірний файл'); }
+  e.target.value = '';
+};
+$('wipe').onclick = () => {
+  if (!confirm('Точно видалити ВСІ витрати й налаштування?')) return;
+  localStorage.removeItem(KEY); state = load(); save(); render(); renderSettings(); toast('Усе очищено');
+};
+
+// Ask the browser not to evict our data under storage pressure
+navigator.storage?.persist?.();
+if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js');
+
+render();
+</script>
+</body>
+</html>

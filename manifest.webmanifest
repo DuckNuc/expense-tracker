@@ -1,0 +1,15 @@
+{
+  "name": "Витрати",
+  "short_name": "Витрати",
+  "description": "Простий трекер витрат без реклами",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f5f7",
+  "theme_color": "#0f766e",
+  "lang": "uk",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
