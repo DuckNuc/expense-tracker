@@ -1,6 +1,6 @@
 // Caches the app shell so it opens offline. Bump VERSION after changing files.
-const VERSION = 'v1';
-const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon.svg'];
+const VERSION = 'v2';
+const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
@@ -20,8 +20,10 @@ self.addEventListener('fetch', e => {
   e.respondWith(
     fetch(e.request)
       .then(res => {
-        const copy = res.clone();
-        caches.open(VERSION).then(c => c.put(e.request, copy));
+        if (res.ok && new URL(e.request.url).origin === location.origin) {
+          const copy = res.clone();
+          caches.open(VERSION).then(c => c.put(e.request, copy));
+        }
         return res;
       })
       .catch(() => caches.match(e.request, { ignoreSearch: true }))
