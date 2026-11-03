@@ -1,5 +1,5 @@
 // Caches the app shell so it opens offline. Bump VERSION after changing files.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', e => {

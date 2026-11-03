@@ -91,27 +91,34 @@ function render() {
 function renderHome() {
   const list = monthExpenses();
   const total = list.reduce((s, e) => s + e.amount, 0);
+  const [y, m] = viewMonth.split('-').map(Number);
+  const monthName = new Date(y, m - 1, 1).toLocaleDateString('uk-UA', { month: 'long' });
+  $('heroLabel').textContent = 'Витрачено за ' + monthName;
   $('total').textContent = money(total);
 
-  const [y, m] = viewMonth.split('-').map(Number);
   const daysInMonth = new Date(y, m, 0).getDate();
   const isCurrent = viewMonth === monthKey(new Date());
   const daysPassed = isCurrent ? new Date().getDate() : daysInMonth;
+  $('sCount').textContent = list.length;
+  $('sCountLbl').textContent = plural(list.length, 'запис', 'записи', 'записів');
+  $('sDay').textContent = money(Math.round(total / daysPassed));
+
   const budget = Number(state.settings.budget) || 0;
-  const sub = [`${list.length} ${plural(list.length, 'запис', 'записи', 'записів')}`, `≈ ${money(Math.round(total / daysPassed))} / день`];
   if (budget) {
     const left = budget - total;
-    sub.push(left >= 0 ? `Залишок: ${money(left)}` : `Перевищено на ${money(-left)}`);
+    $('sLeft').textContent = money(Math.round(Math.abs(left)));
+    $('sLeftLbl').textContent = left >= 0 ? 'залишок' : 'перевищено';
     $('budgetBar').hidden = false;
     $('budgetBar').classList.toggle('over', left < 0);
     $('budgetBar').firstElementChild.style.width = Math.min(100, total / budget * 100) + '%';
   } else {
+    $('sLeft').textContent = '—';
+    $('sLeftLbl').textContent = 'бюджет';
     $('budgetBar').hidden = true;
   }
-  $('summarySub').innerHTML = sub.map(s => `<span>${esc(s)}</span>`).join('');
 
   if (!list.length) {
-    $('days').innerHTML = `<div class="empty"><div>🪙</div>Немає витрат за цей місяць.<br>Натисніть «+», щоб додати.</div>`;
+    $('days').innerHTML = emptyState('i-coins', 'Поки що порожньо', 'Натисніть «+» внизу, щоб додати першу витрату');
     return;
   }
   const byDay = {};
@@ -137,7 +144,7 @@ function renderStats() {
   const total = list.reduce((s, e) => s + e.amount, 0);
   if (!total) {
     $('donut').innerHTML = '';
-    $('statList').innerHTML = `<div class="empty"><div>📊</div>Тут зʼявиться розподіл витрат по категоріях.</div>`;
+    $('statList').innerHTML = emptyState('i-pie', 'Немає даних', 'Тут зʼявиться розподіл витрат по категоріях');
     return;
   }
   const sums = {};
@@ -145,25 +152,25 @@ function renderStats() {
   const rows = Object.entries(sums).sort((a, b) => b[1] - a[1]);
 
   // Donut chart
-  const R = 70, C = 2 * Math.PI * R;
+  const R = 78, C = 2 * Math.PI * R;
   let offset = 0;
   const arcs = rows.map(([id, v]) => {
     const len = v / total * C;
-    const seg = `<circle r="${R}" cx="90" cy="90" fill="none" stroke="${catById(id).color}" stroke-width="22"
-      stroke-dasharray="${Math.max(len - (rows.length > 1 ? 2 : 0), 0.5)} ${C}" stroke-dashoffset="${-offset}" transform="rotate(-90 90 90)"/>`;
+    const seg = `<circle r="${R}" cx="100" cy="100" fill="none" stroke="${catById(id).color}" stroke-width="20" stroke-linecap="butt"
+      stroke-dasharray="${Math.max(len - (rows.length > 1 ? 3 : 0), 0.5)} ${C}" stroke-dashoffset="${-offset}" transform="rotate(-90 100 100)"/>`;
     offset += len;
     return seg;
   }).join('');
-  $('donut').innerHTML = `<svg width="180" height="180" viewBox="0 0 180 180">${arcs}
-    <text x="90" y="86" text-anchor="middle" font-size="12" fill="var(--muted)">Разом</text>
-    <text x="90" y="106" text-anchor="middle" font-size="17" font-weight="700" fill="var(--text)">${esc(money(Math.round(total)))}</text></svg>`;
+  $('donut').innerHTML = `<svg width="200" height="200" viewBox="0 0 200 200">${arcs}
+    <text x="100" y="94" text-anchor="middle" font-size="13" fill="var(--muted)">Разом</text>
+    <text x="100" y="118" text-anchor="middle" font-size="20" font-weight="750" fill="var(--text)">${esc(money(Math.round(total)))}</text></svg>`;
 
   $('statList').innerHTML = rows.map(([id, v]) => {
     const c = catById(id), p = v / total * 100;
     return `<div class="stat-row">
       <div class="emoji" style="background:${c.color}22">${esc(c.emoji)}</div>
       <div class="meta">
-        <div class="top"><span>${esc(c.name)} <span class="pct">${p.toFixed(0)}%</span></span><b>${esc(money(v))}</b></div>
+        <div class="top"><span class="name">${esc(c.name)}<span class="pct">${p.toFixed(0)}%</span></span><b>${esc(money(v))}</b></div>
         <div class="bar"><i style="width:${p}%;background:${c.color}"></i></div>
       </div>
     </div>`;
@@ -174,10 +181,15 @@ function renderSettings() {
   $('budget').value = state.settings.budget || '';
   $('currency').value = state.settings.currency;
   $('catEditList').innerHTML = state.cats.map(c => `<div class="cat-edit">
-    <div class="emoji" style="background:${c.color}22;width:34px;height:34px;font-size:18px">${esc(c.emoji)}</div>
+    <div class="emoji" style="background:${c.color}22">${esc(c.emoji)}</div>
     <div class="nm">${esc(c.name)}</div>
-    <button data-del-cat="${esc(c.id)}">Видалити</button>
+    <button data-del-cat="${esc(c.id)}" aria-label="Видалити категорію"><svg class="i"><use href="#i-trash"/></svg></button>
   </div>`).join('');
+  renderLockToggle();
+}
+
+function emptyState(icon, title, text) {
+  return `<div class="empty"><div class="ico"><svg class="i"><use href="#${icon}"/></svg></div><b>${esc(title)}</b>${esc(text)}</div>`;
 }
 
 function dayLabel(date) {
@@ -221,7 +233,7 @@ function closeSheet() {
 }
 function renderCatPicker() {
   $('fCats').innerHTML = state.cats.map(c => `<button class="cat ${c.id === selectedCat ? 'on' : ''}" data-cat="${esc(c.id)}">
-    <span class="e">${esc(c.emoji)}</span>${esc(c.name)}</button>`).join('');
+    <span class="e">${esc(c.emoji)}</span><span class="t">${esc(c.name)}</span></button>`).join('');
 }
 
 function submit() {
@@ -282,13 +294,121 @@ $('del').onclick = () => {
   save(); closeSheet(); render(); toast('Видалено');
 };
 
-document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
-  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
-  ['home', 'stats', 'settings'].forEach(v => $('view-' + v).hidden = v !== t.dataset.view);
-  document.querySelector('header').hidden = t.dataset.view === 'settings';
-  if (t.dataset.view === 'settings') renderSettings();
+// ---------- Navigation ----------
+let currentView = 'home', lastTab = 'home';
+function showView(view) {
+  currentView = view;
+  if (view !== 'settings') lastTab = view;
+  ['home', 'stats', 'settings'].forEach(v => $('view-' + v).hidden = v !== view);
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x.dataset.view === view));
+  const inSettings = view === 'settings';
+  $('monthSwitch').hidden = inSettings;
+  $('pageTitle').hidden = !inSettings;
+  $('settingsBtn').classList.toggle('ghost', inSettings);
+  updateLeftBtn();
+  if (inSettings) renderSettings();
   window.scrollTo(0, 0);
+}
+// Left header slot: "back" in settings, "lock now" when lock is on, otherwise an invisible spacer
+function updateLeftBtn() {
+  const b = $('leftBtn'), inSettings = currentView === 'settings';
+  b.classList.toggle('ghost', !inSettings && !lockEnabled());
+  b.setAttribute('aria-label', inSettings ? 'Назад' : 'Заблокувати');
+  b.firstElementChild.firstElementChild.setAttribute('href', inSettings ? '#i-left' : '#i-lock');
+}
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => showView(t.dataset.view));
+$('settingsBtn').onclick = () => showView('settings');
+$('leftBtn').onclick = () => currentView === 'settings' ? showView(lastTab) : lock();
+
+// ---------- Fingerprint lock (WebAuthn platform authenticator) ----------
+// A screen lock, not encryption: it keeps people holding your unlocked phone out of the app.
+const LOCK_KEY = 'expense-tracker-lock';
+const RELOCK_AFTER_MS = 30000;
+const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+function lockConfig() { try { return JSON.parse(localStorage.getItem(LOCK_KEY)); } catch { return null; } }
+function lockEnabled() { return !!lockConfig()?.id; }
+async function lockSupported() {
+  try { return !!window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); }
+  catch { return false; }
+}
+async function registerFingerprint() {
+  const cred = await navigator.credentials.create({ publicKey: {
+    challenge: crypto.getRandomValues(new Uint8Array(32)),
+    rp: { name: 'Витрати' },
+    user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'Витрати', displayName: 'Витрати' },
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+    authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
+    attestation: 'none', timeout: 60000,
+  }});
+  localStorage.setItem(LOCK_KEY, JSON.stringify({ id: b64(cred.rawId) }));
+}
+async function verifyFingerprint() {
+  await navigator.credentials.get({ publicKey: {
+    challenge: crypto.getRandomValues(new Uint8Array(32)),
+    allowCredentials: [{ type: 'public-key', id: unb64(lockConfig().id), transports: ['internal'] }],
+    userVerification: 'required', timeout: 60000,
+  }});
+}
+
+function lock() {
+  if (!lockEnabled()) return;
+  closeSheet();
+  document.body.classList.add('locked');
+  $('lock').hidden = false;
+}
+let unlocking = false;
+// `auto` = prompted without a tap; some browsers refuse that, so stay quiet and wait for the button
+async function unlock(auto) {
+  if (unlocking) return;
+  unlocking = true;
+  try {
+    await verifyFingerprint();
+    document.body.classList.remove('locked');
+    $('lock').hidden = true;
+  } catch {
+    if (!auto) toast('Не вдалося розпізнати');
+  } finally { unlocking = false; }
+}
+$('unlockBtn').onclick = () => unlock(false);
+$('lockReset').onclick = () => {
+  if (!confirm('Без відбитка увійти не можна. Можна лише скинути додаток — це видалить УСІ витрати на цьому телефоні. Продовжити?')) return;
+  if (!confirm('Точно? Відновити дані можна буде тільки з резервної копії.')) return;
+  localStorage.removeItem(KEY); localStorage.removeItem(LOCK_KEY);
+  location.reload();
+};
+
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) hiddenAt = Date.now();
+  else if (lockEnabled() && Date.now() - hiddenAt > RELOCK_AFTER_MS && $('lock').hidden) { lock(); unlock(true); }
 });
+
+async function renderLockToggle() {
+  const t = $('lockToggle');
+  const supported = await lockSupported();
+  t.checked = lockEnabled();
+  t.disabled = !supported && !t.checked;
+  $('lockHint').textContent = supported ? 'Face ID / Touch ID на iPhone' : 'Недоступно на цьому пристрої';
+}
+$('lockToggle').onchange = async e => {
+  const t = e.target;
+  t.disabled = true;
+  try {
+    if (t.checked) {
+      await registerFingerprint();
+      toast('Вхід по відбитку увімкнено');
+    } else {
+      await verifyFingerprint(); // only the owner may switch it off
+      localStorage.removeItem(LOCK_KEY);
+      toast('Вхід по відбитку вимкнено');
+    }
+  } catch {
+    toast('Скасовано');
+  }
+  updateLeftBtn();
+  renderLockToggle();
+};
 
 $('budget').onchange = () => { state.settings.budget = Math.max(0, Number($('budget').value) || 0); save(); render(); };
 $('currency').onchange = () => { state.settings.currency = $('currency').value; save(); render(); };
@@ -336,3 +456,5 @@ navigator.storage?.persist?.();
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js');
 
 render();
+showView('home');
+if (lockEnabled()) { lock(); unlock(true); }
