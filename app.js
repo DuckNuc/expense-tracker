@@ -5,6 +5,15 @@ const DEFAULT_CATS = [
   ['💡','Комуналка'], ['📱','Звʼязок'], ['💊','Здоровʼя'], ['👕','Одяг'],
   ['🎉','Розваги'], ['🎁','Подарунки'], ['📚','Навчання'], ['📦','Інше'],
 ];
+// Income sources are fixed (not editable) and live outside state.cats
+const INCOME_CATS = [
+  { id: 'i0', emoji: '💼', name: 'Зарплата', color: '#16a34a' },
+  { id: 'i1', emoji: '💻', name: 'Підробіток', color: '#0d9488' },
+  { id: 'i2', emoji: '🎁', name: 'Подарунок', color: '#d946ef' },
+  { id: 'i3', emoji: '↩️', name: 'Повернення', color: '#0ea5e9' },
+  { id: 'i5', emoji: '🏦', name: 'Кешбек, %', color: '#6366f1' },
+  { id: 'i4', emoji: '💰', name: 'Інше', color: '#ca8a04' },
+];
 const CURRENCIES = ['₴', '$', '€', 'zł', '£'];
 const COLOR_RE = /^#[0-9a-f]{6}$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -45,6 +54,7 @@ function sanitize(d) {
     emoji: str(c.emoji, 8) || '🏷️',
     name: str(c.name, 40) || 'Категорія',
     color: COLOR_RE.test(c.color) ? c.color : PALETTE[i % PALETTE.length],
+    budget: Math.max(0, Math.round(Number(c.budget) || 0)),
   }));
   if (!cats.length) return null;
   const expenses = d.expenses
@@ -53,6 +63,7 @@ function sanitize(d) {
       const x = { id: id(e.id) || 'r' + i, ts: Number(e.ts) || 0, amount: amount(e.amount), cat: id(e.cat), note: str(e.note, 200), date: e.date };
       if (id(e.rec)) x.rec = id(e.rec);
       if (e.photo === true) x.photo = true;
+      if (e.inc === true) x.inc = true;
       return x;
     });
   const favs = list(d.favs).filter(f => f && okAmount(f.amount)).slice(0, 30).map((f, i) => ({
@@ -62,12 +73,14 @@ function sanitize(d) {
     id: id(r.id) || 'p' + i, amount: amount(r.amount), cat: id(r.cat), note: str(r.note, 80),
     day: Math.min(31, Math.max(1, parseInt(r.day, 10) || 1)),
     last: MONTH_RE.test(r.last) ? r.last : monthKey(new Date()),
+    ...(r.inc === true && { inc: true }),
   }));
   const s = d.settings || {};
   return {
     expenses, cats, favs, recurring,
     settings: { currency: CURRENCIES.includes(s.currency) ? s.currency : '₴', budget: Math.max(0, Number(s.budget) || 0) },
     lastCat: id(d.lastCat),
+    lastIncCat: id(d.lastIncCat),
   };
 }
 function save() {
@@ -87,7 +100,9 @@ function money(n) {
   const s = n.toLocaleString('uk-UA', { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 });
   return s + ' ' + state.settings.currency;
 }
-function catById(id) { return state.cats.find(c => c.id === id) || { emoji: '❔', name: 'Без категорії', color: '#9ca3af' }; }
+function catById(id) {
+  return state.cats.find(c => c.id === id) || INCOME_CATS.find(c => c.id === id) || { emoji: '❔', name: 'Без категорії', color: '#9ca3af' };
+}
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]); }
 
 // Toast with an optional action button (used for "undo")
@@ -105,7 +120,11 @@ function toast(msg, action) {
   toast.t = setTimeout(() => t.classList.remove('show'), action ? 5000 : 1800);
 }
 
-function monthExpenses(key = viewMonth) { return state.expenses.filter(e => e.date.startsWith(key)); }
+// state.expenses holds both kinds of entries; incomes are marked with inc: true
+function monthEntries(key = viewMonth) { return state.expenses.filter(e => e.date.startsWith(key)); }
+function monthExpenses(key = viewMonth) { return monthEntries(key).filter(e => !e.inc); }
+function monthIncome(key = viewMonth) { return monthEntries(key).filter(e => e.inc); }
+function catSpent(catId, key = viewMonth) { return sumOf(monthExpenses(key).filter(e => e.cat === catId)); }
 // Previous month's expenses for a fair comparison: for the current month only up to today's day
 function prevPeriod() {
   const upTo = viewMonth === monthKey(new Date()) ? new Date().getDate() : 31;
@@ -179,7 +198,7 @@ function applyRecurring() {
     for (let m = shiftKey(r.last, 1), guard = 0; m <= cur && guard < 36; m = shiftKey(m, 1), guard++) {
       const day = Math.min(r.day, daysIn(m));
       if (m === cur && now.getDate() < day) break;
-      state.expenses.push({ id: uid(), ts: Date.now(), amount: r.amount, cat: r.cat, note: r.note, date: `${m}-${pad(day)}`, rec: r.id });
+      state.expenses.push({ id: uid(), ts: Date.now(), amount: r.amount, cat: r.cat, note: r.note, date: `${m}-${pad(day)}`, rec: r.id, ...(r.inc && { inc: true }) });
       r.last = m;
       added++;
     }
@@ -207,22 +226,31 @@ function renderHome() {
 
   const isCurrent = viewMonth === monthKey(new Date());
   const daysPassed = isCurrent ? new Date().getDate() : daysIn(viewMonth);
-  $('sCount').textContent = list.length;
-  $('sCountLbl').textContent = plural(list.length, 'запис', 'записи', 'записів');
   $('sDay').textContent = money(Math.round(total / daysPassed));
 
+  // With income this month the side columns show income and balance; otherwise count and budget left
+  const income = sumOf(monthIncome());
   const budget = Number(state.settings.budget) || 0;
+  const left = budget - total;
+  const leftText = left >= 0 ? `Залишок бюджету ${money(Math.round(left))}` : `Бюджет перевищено на ${money(Math.round(-left))}`;
+  if (income) {
+    const bal = income - total;
+    $('s1').textContent = money(Math.round(income));
+    $('s1l').textContent = 'дохід';
+    $('s3').textContent = (bal >= 0 ? '+' : '−') + money(Math.round(Math.abs(bal)));
+    $('s3l').textContent = 'баланс';
+  } else {
+    $('s1').textContent = list.length;
+    $('s1l').textContent = plural(list.length, 'запис', 'записи', 'записів');
+    $('s3').textContent = budget ? money(Math.round(Math.abs(left))) : '—';
+    $('s3l').textContent = budget ? (left >= 0 ? 'залишок' : 'перевищено') : 'бюджет';
+  }
+  $('budgetBar').hidden = !budget;
+  $('budgetCap').hidden = !(budget && income);
   if (budget) {
-    const left = budget - total;
-    $('sLeft').textContent = money(Math.round(Math.abs(left)));
-    $('sLeftLbl').textContent = left >= 0 ? 'залишок' : 'перевищено';
-    $('budgetBar').hidden = false;
     $('budgetBar').classList.toggle('over', left < 0);
     $('budgetBar').firstElementChild.style.width = Math.min(100, total / budget * 100) + '%';
-  } else {
-    $('sLeft').textContent = '—';
-    $('sLeftLbl').textContent = 'бюджет';
-    $('budgetBar').hidden = true;
+    $('budgetCap').textContent = leftText;
   }
 
   // Forecast and comparison with the previous month
@@ -238,25 +266,101 @@ function renderHome() {
   $('heroMeta').hidden = !pills.length;
 
   renderQuick();
+  renderSearchControls();
 
-  if (!list.length) {
-    $('days').innerHTML = emptyState('i-coins', 'Поки що порожньо', 'Натисніть «+» внизу, щоб додати першу витрату');
+  if (searchActive()) {
+    const found = searchResults();
+    const out = sumOf(found.filter(e => !e.inc)), inc = sumOf(found.filter(e => e.inc));
+    $('alerts').innerHTML = '';
+    $('searchInfo').hidden = false;
+    $('searchInfo').innerHTML = found.length
+      ? `Знайдено <b>${found.length}</b> ${plural(found.length, 'запис', 'записи', 'записів')}` +
+        (out ? ` · витрати <b>${esc(money(out))}</b>` : '') + (inc ? ` · доходи <b>${esc(money(inc))}</b>` : '')
+      : '';
+    $('days').innerHTML = found.length ? renderDays(found) : emptyState('i-search', 'Нічого не знайдено', 'Спробуйте інший запит або скиньте фільтри');
     return;
   }
+  $('searchInfo').hidden = true;
+  renderAlerts();
+
+  const entries = monthEntries();
+  $('days').innerHTML = entries.length ? renderDays(entries)
+    : emptyState('i-coins', 'Поки що порожньо', 'Натисніть «+» внизу, щоб додати першу витрату');
+}
+
+function renderDays(entries) {
   const byDay = {};
-  list.sort((a, b) => b.date.localeCompare(a.date) || b.ts - a.ts).forEach(e => (byDay[e.date] ||= []).push(e));
-  $('days').innerHTML = Object.entries(byDay).map(([date, items]) => `<div class="day">
-      <div class="day-head"><span>${esc(dayLabel(date))}</span><span>${esc(money(sumOf(items)))}</span></div>
+  [...entries].sort((a, b) => b.date.localeCompare(a.date) || b.ts - a.ts).forEach(e => (byDay[e.date] ||= []).push(e));
+  const thisYear = String(new Date().getFullYear());
+  return Object.entries(byDay).map(([date, items]) => {
+    const out = sumOf(items.filter(e => !e.inc)), inc = sumOf(items.filter(e => e.inc));
+    const label = dayLabel(date) + (date.startsWith(thisYear) ? '' : ' ' + date.slice(0, 4));
+    return `<div class="day">
+      <div class="day-head"><span>${esc(label)}</span><span>${out ? esc(money(out)) : ''}${out && inc ? ' · ' : ''}${inc ? `<span class="inc">+${esc(money(inc))}</span>` : ''}</span></div>
       <div class="list">${items.map(e => {
         const c = catById(e.cat);
         const flags = (e.rec ? icon('i-repeat') : '') + (e.photo ? icon('i-camera') : '');
         return `<button class="item" data-id="${esc(e.id)}">
           <div class="emoji" style="background:${c.color}22">${esc(c.emoji)}</div>
           <div class="meta"><div class="name">${esc(c.name)}</div>${flags || e.note ? `<div class="note">${flags}${esc(e.note)}</div>` : ''}</div>
-          <div class="amt">−${esc(money(e.amount))}</div>
+          <div class="amt${e.inc ? ' inc' : ''}">${e.inc ? '+' : '−'}${esc(money(e.amount))}</div>
         </button>`;
       }).join('')}</div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
+}
+
+// Categories that reached 80%+ of their monthly limit
+function renderAlerts() {
+  const rows = state.cats.filter(c => c.budget)
+    .map(c => ({ c, spent: catSpent(c.id) }))
+    .filter(x => x.spent >= x.c.budget * 0.8)
+    .sort((a, b) => b.spent / b.c.budget - a.spent / a.c.budget);
+  $('alerts').innerHTML = rows.map(({ c, spent }) => {
+    const p = Math.round(spent / c.budget * 100), over = spent > c.budget;
+    return `<div class="alert${over ? ' over' : ''}">
+      <div class="emoji" style="background:${c.color}22">${esc(c.emoji)}</div>
+      <div class="meta">
+        <div class="top"><span>${esc(c.name)}</span><span>${over ? 'Ліміт перевищено' : p + '% ліміту'}</span></div>
+        <div class="sub2">${esc(money(spent))} з ${esc(money(c.budget))}${over ? ' · +' + esc(money(spent - c.budget)) : ' · лишилось ' + esc(money(c.budget - spent))}</div>
+        <div class="bar"><i style="width:${Math.min(100, p)}%"></i></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ---------- Search & filters ----------
+const filters = { q: '', type: 'all', period: 'all', cat: '', min: '', max: '' };
+function filterCount() {
+  return (filters.type !== 'all') + (filters.period !== 'all') + !!filters.cat + (filters.min !== '') + (filters.max !== '');
+}
+function searchActive() { return !!filters.q.trim() || filterCount() > 0; }
+function searchResults() {
+  const q = filters.q.trim().toLowerCase();
+  const cur = monthKey(new Date());
+  const from = { month: null, '3m': shiftKey(cur, -2) + '-01', year: shiftKey(cur, -11) + '-01' }[filters.period];
+  const min = filters.min === '' ? -Infinity : Number(filters.min), max = filters.max === '' ? Infinity : Number(filters.max);
+  return state.expenses.filter(e => {
+    if (filters.type === 'out' && e.inc || filters.type === 'in' && !e.inc) return false;
+    if (filters.cat && e.cat !== filters.cat) return false;
+    if (e.amount < min || e.amount > max) return false;
+    if (filters.period === 'month' && !e.date.startsWith(viewMonth)) return false;
+    if (from && e.date < from) return false;
+    if (q && !`${e.note} ${catById(e.cat).name} ${e.amount}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+function renderSearchControls() {
+  $('qClear').hidden = !filters.q;
+  const n = filterCount();
+  $('filterDot').hidden = !n;
+  $('filterDot').textContent = n;
+  $('filterBtn').classList.toggle('on', !$('filters').hidden || n > 0);
+  document.querySelectorAll('#fType button').forEach(b => b.classList.toggle('on', b.dataset.v === filters.type));
+  document.querySelectorAll('#fPeriod button').forEach(b => b.classList.toggle('on', b.dataset.v === filters.period));
+  const opt = c => `<option value="${esc(c.id)}"${c.id === filters.cat ? ' selected' : ''}>${esc(c.emoji + ' ' + c.name)}</option>`;
+  $('fCat').innerHTML = `<option value="">Усі категорії</option><optgroup label="Витрати">${state.cats.map(opt).join('')}</optgroup>` +
+    `<optgroup label="Доходи">${INCOME_CATS.map(opt).join('')}</optgroup>`;
 }
 
 // Day-to-day spending extrapolated to the whole month, plus fixed monthly payments
@@ -264,7 +368,7 @@ function forecast() {
   const list = monthExpenses();
   const recurringDone = sumOf(list.filter(e => e.rec));
   const variable = sumOf(list) - recurringDone;
-  const recurringPending = sumOf(state.recurring.filter(r => r.last < viewMonth));
+  const recurringPending = sumOf(state.recurring.filter(r => !r.inc && r.last < viewMonth));
   return variable / new Date().getDate() * daysIn(viewMonth) + recurringDone + recurringPending;
 }
 
@@ -276,6 +380,7 @@ function renderQuick() {
 }
 
 function renderStats() {
+  renderBalance();
   renderTrend();
   renderRecurring();
   const list = monthExpenses();
@@ -304,16 +409,39 @@ function renderStats() {
     <text x="100" y="94" text-anchor="middle" class="donut-t1">Разом</text>
     <text x="100" y="118" text-anchor="middle" class="donut-t2">${esc(money(Math.round(total)))}</text></svg>`;
 
+  // With a limit the bar shows progress towards it; without one, the share of the month's total
   $('statList').innerHTML = rows.map(([id, v]) => {
     const c = catById(id), p = v / total * 100;
+    const lim = c.budget ? v / c.budget * 100 : 0;
+    const barColor = !c.budget ? c.color : lim > 100 ? 'var(--danger)' : lim >= 80 ? '#f59e0b' : c.color;
     return `<div class="stat-row">
       <div class="emoji" style="background:${c.color}22">${esc(c.emoji)}</div>
       <div class="meta">
         <div class="top"><span class="name">${esc(c.name)}<span class="pct">${p.toFixed(0)}%</span>${delta(v, prevSums[id])}</span><b>${esc(money(v))}</b></div>
-        <div class="bar"><i style="width:${p}%;background:${c.color}"></i></div>
+        <div class="bar"><i style="width:${Math.min(100, c.budget ? lim : p)}%;background:${barColor}"></i></div>
+        ${c.budget ? `<div class="sub2">${Math.round(lim)}% ліміту ${esc(money(c.budget))}</div>` : ''}
       </div>
     </div>`;
   }).join('');
+}
+
+function renderBalance() {
+  const inc = sumOf(monthIncome()), out = sumOf(monthExpenses());
+  $('balance').hidden = !inc;
+  if (!inc) return;
+  const bal = inc - out;
+  const bySource = INCOME_CATS.map(c => ({ c, v: sumOf(monthIncome().filter(e => e.cat === c.id)) })).filter(x => x.v);
+  $('balance').innerHTML = `<div class="card-head"><b>Баланс місяця</b></div>
+    <div class="bal">
+      <div><b class="pos">${esc(money(Math.round(inc)))}</b><span>дохід</span></div>
+      <div><b>${esc(money(Math.round(out)))}</b><span>витрати</span></div>
+      <div><b class="${bal >= 0 ? 'pos' : 'neg'}">${bal >= 0 ? '+' : '−'}${esc(money(Math.round(Math.abs(bal))))}</b><span>залишок</span></div>
+    </div>
+    <p class="bal-note">${bal >= 0 ? `Відкладено <b>${Math.round(bal / inc * 100)}%</b> доходу` : `Витрати перевищили дохід на <b>${esc(money(Math.round(-bal)))}</b>`}</p>` +
+    bySource.map(({ c, v }) => `<div class="stat-row">
+      <div class="emoji" style="background:${c.color}22">${esc(c.emoji)}</div>
+      <div class="meta"><div class="top"><span class="name">${esc(c.name)}</span><b class="pos" style="color:var(--good)">+${esc(money(v))}</b></div></div>
+    </div>`).join('');
 }
 function delta(cur, prev) {
   if (!prev) return '';
@@ -347,18 +475,18 @@ function renderRecurring() {
       <p class="muted-p">Увімкніть «Повторювати щомісяця» при додаванні витрати — оренда, звʼязок і підписки додаватимуться самі.</p>`;
     return;
   }
-  const monthly = sumOf(rs);
-  $('recList').innerHTML = `<div class="card-head"><b>Регулярні платежі</b><span>${esc(money(monthly))}/міс</span></div>` +
+  const monthly = sumOf(rs.filter(r => !r.inc));
+  $('recList').innerHTML = `<div class="card-head"><b>Регулярні платежі</b><span>${monthly ? esc(money(monthly)) + '/міс' : ''}</span></div>` +
     rs.map(r => {
       const c = catById(r.cat);
       return `<div class="stat-row">
         <div class="emoji" style="background:${c.color}22">${esc(c.emoji)}</div>
-        <div class="meta"><div class="top"><span class="name">${esc(r.note || c.name)}</span><b>${esc(money(r.amount))}</b></div>
+        <div class="meta"><div class="top"><span class="name">${esc(r.note || c.name)}</span><b${r.inc ? ' style="color:var(--good)"' : ''}>${r.inc ? '+' : ''}${esc(money(r.amount))}</b></div>
           <div class="sub2">${r.day} числа щомісяця · ${esc(money(r.amount * 12))} на рік</div></div>
         <button class="icon-sm" data-del-rec="${esc(r.id)}" aria-label="Видалити платіж">${icon('i-trash')}</button>
       </div>`;
     }).join('') +
-    `<div class="rec-total">На рік це <b>${esc(money(monthly * 12))}</b></div>`;
+    (monthly ? `<div class="rec-total">Обовʼязкові витрати на рік: <b>${esc(money(monthly * 12))}</b></div>` : '');
 }
 
 function renderSettings() {
@@ -367,6 +495,7 @@ function renderSettings() {
   $('catEditList').innerHTML = state.cats.map(c => `<div class="cat-edit">
     <div class="emoji" style="background:${c.color}22">${esc(c.emoji)}</div>
     <div class="nm">${esc(c.name)}</div>
+    <input type="number" inputmode="numeric" min="0" placeholder="ліміт" value="${c.budget || ''}" data-budget-cat="${esc(c.id)}" aria-label="Ліміт для ${esc(c.name)}">
     <button data-del-cat="${esc(c.id)}" aria-label="Видалити категорію">${icon('i-trash')}</button>
   </div>`).join('');
   $('favEditList').innerHTML = state.favs.length ? state.favs.map(f => {
@@ -403,23 +532,39 @@ function plural(n, one, few, many) {
 let sheetPhoto = { blob: null, changed: false, url: null };
 const findFav = x => state.favs.find(f => f.amount === x.amount && f.cat === x.cat && f.note === x.note);
 
+let sheetType = 'out';
+function setSheetType(type) {
+  sheetType = type;
+  document.querySelectorAll('#typeSeg button').forEach(b => b.classList.toggle('on', b.dataset.type === type));
+  $('sheetTitle').textContent = editingId ? 'Редагувати' : type === 'in' ? 'Новий дохід' : 'Нова витрата';
+  $('amountWrap').classList.toggle('inc', type === 'in');
+  $('rowFav').hidden = type === 'in';
+  $('repHint').textContent = type === 'in' ? 'Зарплата, стипендія, оренда від квартирантів' : 'Оренда, звʼязок, підписки';
+  $('del').textContent = type === 'in' ? 'Видалити дохід' : 'Видалити витрату';
+  const pool = type === 'in' ? INCOME_CATS : state.cats;
+  if (!pool.some(c => c.id === selectedCat)) {
+    const last = type === 'in' ? state.lastIncCat : state.lastCat;
+    selectedCat = pool.some(c => c.id === last) ? last : pool[0]?.id;
+  }
+  renderCatPicker();
+  renderSuggest();
+}
+
 function openSheet(exp, opts = {}) {
   editingId = exp ? exp.id : null;
-  $('sheetTitle').textContent = exp ? 'Редагувати' : 'Нова витрата';
   $('fAmount').value = exp ? String(exp.amount).replace('.', ',') : '';
   fitAmount();
   $('fNote').value = exp ? exp.note : '';
   const defaultDate = viewMonth === monthKey(new Date()) ? today() : viewMonth + '-01';
   $('fDate').value = exp ? exp.date : defaultDate;
   $('fCur').textContent = state.settings.currency;
-  selectedCat = exp ? exp.cat : (state.lastCat && state.cats.some(c => c.id === state.lastCat) ? state.lastCat : state.cats[0]?.id);
+  selectedCat = exp ? exp.cat : null;
   $('tFav').checked = !!opts.fav || (exp ? !!findFav(exp) : false);
   $('tRep').checked = !!(exp?.rec && state.recurring.some(r => r.id === exp.rec));
   $('del').hidden = !exp;
   setSheetPhoto(null, false);
   if (exp?.photo) photoGet(exp.id).then(b => { if (b && editingId === exp.id) setSheetPhoto(b, false); }).catch(() => {});
-  renderCatPicker();
-  renderSuggest();
+  setSheetType(exp?.inc ? 'in' : 'out');
   $('backdrop').classList.add('open');
   $('sheet').classList.add('open');
   if (!exp) setTimeout(() => $('fAmount').focus(), 260);
@@ -432,7 +577,8 @@ function closeSheet() {
   document.activeElement?.blur();
 }
 function renderCatPicker() {
-  $('fCats').innerHTML = state.cats.map(c => `<button class="cat ${c.id === selectedCat ? 'on' : ''}" data-cat="${esc(c.id)}">
+  $('fCats').classList.toggle('three', sheetType === 'in'); // 6 income sources → even 3×2 grid
+  $('fCats').innerHTML = (sheetType === 'in' ? INCOME_CATS : state.cats).map(c => `<button class="cat ${c.id === selectedCat ? 'on' : ''}" data-cat="${esc(c.id)}">
     <span class="e">${esc(c.emoji)}</span><span class="t">${esc(c.name)}</span></button>`).join('');
 }
 
@@ -450,7 +596,7 @@ function renderSuggest() {
   const q = $('fNote').value.trim().toLowerCase();
   const stats = new Map();
   state.expenses.forEach(e => {
-    if (!e.note) return;
+    if (!e.note || !!e.inc !== (sheetType === 'in')) return;
     const k = e.note.toLowerCase();
     const s = stats.get(k) || { n: 0, ts: '' };
     s.n++;
@@ -474,6 +620,7 @@ async function submit() {
   if (!selectedCat) { toast('Оберіть категорію'); return; }
   saving = true;
   const wasEditing = !!editingId;
+  const isInc = sheetType === 'in';
   const data = { amount, cat: selectedCat, note: $('fNote').value.trim(), date: DATE_RE.test($('fDate').value) ? $('fDate').value : today() };
   let exp;
   if (wasEditing) {
@@ -483,17 +630,20 @@ async function submit() {
     exp = { id: uid(), ts: Date.now(), ...data };
     state.expenses.push(exp);
   }
+  if (isInc) exp.inc = true; else delete exp.inc;
 
   const fav = findFav(exp);
-  if ($('tFav').checked && !fav) state.favs.push({ id: uid(), amount: exp.amount, cat: exp.cat, note: exp.note });
-  if (!$('tFav').checked && fav) state.favs = state.favs.filter(f => f !== fav);
+  if (!isInc && $('tFav').checked && !fav) state.favs.push({ id: uid(), amount: exp.amount, cat: exp.cat, note: exp.note });
+  if ((isInc || !$('tFav').checked) && fav) state.favs = state.favs.filter(f => f !== fav);
 
   const rule = exp.rec && state.recurring.find(r => r.id === exp.rec);
   const day = Number(exp.date.slice(8));
   if ($('tRep').checked) {
-    if (rule) Object.assign(rule, { amount: exp.amount, cat: exp.cat, note: exp.note, day });
-    else {
-      const r = { id: uid(), amount: exp.amount, cat: exp.cat, note: exp.note, day, last: exp.date.slice(0, 7) };
+    if (rule) {
+      Object.assign(rule, { amount: exp.amount, cat: exp.cat, note: exp.note, day });
+      if (isInc) rule.inc = true; else delete rule.inc;
+    } else {
+      const r = { id: uid(), amount: exp.amount, cat: exp.cat, note: exp.note, day, last: exp.date.slice(0, 7), ...(isInc && { inc: true }) };
       state.recurring.push(r);
       exp.rec = r.id;
     }
@@ -509,14 +659,25 @@ async function submit() {
     } catch { toast('Не вдалося зберегти фото'); }
   }
 
-  state.lastCat = selectedCat;
+  if (isInc) state.lastIncCat = selectedCat; else state.lastCat = selectedCat;
   save();
   applyRecurring();
   viewMonth = data.date.slice(0, 7);
   closeSheet();
   render();
   saving = false;
-  toast(wasEditing ? 'Збережено' : 'Додано ✓');
+  const warn = wasEditing ? '' : limitWarning(exp);
+  toast(warn || (wasEditing ? 'Збережено' : isInc ? 'Дохід додано ✓' : 'Додано ✓'));
+}
+
+// Warn once when a new expense pushes its category past 80% or 100% of the limit
+function limitWarning(exp) {
+  const c = !exp.inc && state.cats.find(x => x.id === exp.cat);
+  if (!c?.budget) return '';
+  const spent = catSpent(c.id, exp.date.slice(0, 7)), before = spent - exp.amount;
+  if (spent > c.budget && before <= c.budget) return `⚠️ Ліміт «${c.name}» перевищено`;
+  if (spent >= c.budget * 0.8 && before < c.budget * 0.8) return `⚠️ «${c.name}»: ${Math.round(spent / c.budget * 100)}% ліміту`;
+  return '';
 }
 
 function addFromFav(f) {
@@ -525,7 +686,7 @@ function addFromFav(f) {
   save();
   viewMonth = monthKey(new Date());
   render();
-  toast(`Додано: ${f.note || catById(f.cat).name}, ${money(f.amount)}`, {
+  toast(limitWarning(exp) || `Додано: ${f.note || catById(f.cat).name}, ${money(f.amount)}`, {
     label: 'Скасувати',
     fn: () => { state.expenses = state.expenses.filter(e => e.id !== exp.id); save(); render(); },
   });
@@ -541,9 +702,9 @@ function download(name, content, type) {
 }
 function exportCsv() {
   const q = s => '"' + String(s).replace(/"/g, '""') + '"';
-  const lines = [['Дата', 'Категорія', 'Сума', 'Коментар'].join(';')];
+  const lines = [['Дата', 'Тип', 'Категорія', 'Сума', 'Коментар'].join(';')];
   [...state.expenses].sort((a, b) => a.date.localeCompare(b.date)).forEach(e =>
-    lines.push([e.date, q(catById(e.cat).name), String(e.amount).replace('.', ','), q(e.note)].join(';')));
+    lines.push([e.date, e.inc ? 'Дохід' : 'Витрата', q(catById(e.cat).name), String(e.amount).replace('.', ','), q(e.note)].join(';')));
   download(`vytraty-${today()}.csv`, '﻿' + lines.join('\n'), 'text/csv');
 }
 
@@ -558,6 +719,10 @@ $('fAmount').addEventListener('keydown', e => { if (e.key === 'Enter') submit();
 $('fAmount').addEventListener('input', fitAmount);
 $('fNote').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
 $('fNote').addEventListener('input', renderSuggest);
+$('typeSeg').onclick = e => {
+  const b = e.target.closest('[data-type]');
+  if (b && b.dataset.type !== sheetType) setSheetType(b.dataset.type);
+};
 $('fCats').onclick = e => {
   const b = e.target.closest('[data-cat]');
   if (b) { selectedCat = b.dataset.cat; renderCatPicker(); }
@@ -599,11 +764,27 @@ $('del').onclick = () => {
   const [exp] = state.expenses.splice(i, 1);
   save(); closeSheet(); render();
   const purge = setTimeout(() => { if (exp.photo) photoDel(exp.id).catch(() => {}); }, 6000);
-  toast('Витрату видалено', {
+  toast(exp.inc ? 'Дохід видалено' : 'Витрату видалено', {
     label: 'Повернути',
     fn: () => { clearTimeout(purge); state.expenses.push(exp); save(); render(); },
   });
 };
+// Search & filter controls
+$('q').addEventListener('input', () => { filters.q = $('q').value; renderHome(); });
+$('q').addEventListener('keydown', e => { if (e.key === 'Enter') $('q').blur(); });
+$('qClear').onclick = e => { e.preventDefault(); $('q').value = filters.q = ''; renderHome(); };
+$('filterBtn').onclick = () => { $('filters').hidden = !$('filters').hidden; renderSearchControls(); };
+$('fType').onclick = e => { const b = e.target.closest('[data-v]'); if (b) { filters.type = b.dataset.v; renderHome(); } };
+$('fPeriod').onclick = e => { const b = e.target.closest('[data-v]'); if (b) { filters.period = b.dataset.v; renderHome(); } };
+$('fCat').onchange = () => { filters.cat = $('fCat').value; renderHome(); };
+$('fMin').oninput = () => { filters.min = $('fMin').value; renderHome(); };
+$('fMax').oninput = () => { filters.max = $('fMax').value; renderHome(); };
+$('fReset').onclick = () => {
+  Object.assign(filters, { type: 'all', period: 'all', cat: '', min: '', max: '' });
+  $('fMin').value = $('fMax').value = '';
+  renderHome();
+};
+
 $('trend').onclick = e => {
   const g = e.target.closest('[data-month]');
   if (g) { viewMonth = g.dataset.month; render(); }
@@ -663,6 +844,15 @@ $('catEditList').onclick = e => {
   state.cats = state.cats.filter(c => c.id !== id);
   save(); renderSettings(); render();
 };
+$('catEditList').addEventListener('change', e => {
+  const input = e.target.closest('[data-budget-cat]');
+  const c = input && state.cats.find(x => x.id === input.dataset.budgetCat);
+  if (!c) return;
+  c.budget = Math.max(0, Math.round(Number(input.value) || 0));
+  input.value = c.budget || '';
+  save(); render();
+  toast(c.budget ? `Ліміт «${c.name}»: ${money(c.budget)}` : `Ліміт «${c.name}» прибрано`);
+});
 $('favEditList').onclick = e => {
   const b = e.target.closest('[data-del-fav]');
   if (!b) return;
