@@ -8,6 +8,10 @@ const DEFAULT_CATS = [
 const CURRENCIES = ['₴', '$', '€', 'zł', '£'];
 const COLOR_RE = /^#[0-9a-f]{6}$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MONTH_RE = /^\d{4}-\d{2}$/;
+const PHOTO_RE = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/;
+const MONTH_SHORT = ['січ','лют','бер','кві','тра','чер','лип','сер','вер','жов','лис','гру'];
+const MONTH_GEN = ['січня','лютого','березня','квітня','травня','червня','липня','серпня','вересня','жовтня','листопада','грудня'];
 
 let state = load();
 let viewMonth = monthKey(new Date());
@@ -23,6 +27,8 @@ function load() {
     expenses: [],
     cats: DEFAULT_CATS.map(([emoji, name], i) => ({ id: 'c' + i, emoji, name, color: PALETTE[i % PALETTE.length] })),
     settings: { currency: '₴', budget: 0 },
+    favs: [],
+    recurring: [],
   };
 }
 // Rebuilds data from scratch with only known fields of the right shape,
@@ -31,6 +37,9 @@ function sanitize(d) {
   if (!d || !Array.isArray(d.expenses) || !Array.isArray(d.cats)) return null;
   const str = (v, max) => (typeof v === 'string' || typeof v === 'number' ? String(v) : '').slice(0, max);
   const id = v => str(v, 40).replace(/[^\w-]/g, '');
+  const okAmount = v => Number(v) > 0 && isFinite(v);
+  const amount = v => Math.round(Number(v) * 100) / 100;
+  const list = v => Array.isArray(v) ? v : [];
   const cats = d.cats.filter(c => c && id(c.id)).map((c, i) => ({
     id: id(c.id),
     emoji: str(c.emoji, 8) || '🏷️',
@@ -39,18 +48,24 @@ function sanitize(d) {
   }));
   if (!cats.length) return null;
   const expenses = d.expenses
-    .filter(e => e && Number(e.amount) > 0 && isFinite(e.amount) && DATE_RE.test(e.date))
-    .map((e, i) => ({
-      id: id(e.id) || 'r' + i,
-      ts: Number(e.ts) || 0,
-      amount: Math.round(Number(e.amount) * 100) / 100,
-      cat: id(e.cat),
-      note: str(e.note, 200),
-      date: e.date,
-    }));
+    .filter(e => e && okAmount(e.amount) && DATE_RE.test(e.date))
+    .map((e, i) => {
+      const x = { id: id(e.id) || 'r' + i, ts: Number(e.ts) || 0, amount: amount(e.amount), cat: id(e.cat), note: str(e.note, 200), date: e.date };
+      if (id(e.rec)) x.rec = id(e.rec);
+      if (e.photo === true) x.photo = true;
+      return x;
+    });
+  const favs = list(d.favs).filter(f => f && okAmount(f.amount)).slice(0, 30).map((f, i) => ({
+    id: id(f.id) || 'f' + i, amount: amount(f.amount), cat: id(f.cat), note: str(f.note, 80),
+  }));
+  const recurring = list(d.recurring).filter(r => r && okAmount(r.amount)).slice(0, 100).map((r, i) => ({
+    id: id(r.id) || 'p' + i, amount: amount(r.amount), cat: id(r.cat), note: str(r.note, 80),
+    day: Math.min(31, Math.max(1, parseInt(r.day, 10) || 1)),
+    last: MONTH_RE.test(r.last) ? r.last : monthKey(new Date()),
+  }));
   const s = d.settings || {};
   return {
-    expenses, cats,
+    expenses, cats, favs, recurring,
     settings: { currency: CURRENCIES.includes(s.currency) ? s.currency : '₴', budget: Math.max(0, Number(s.budget) || 0) },
     lastCat: id(d.lastCat),
   };
@@ -61,8 +76,12 @@ function save() {
 
 const $ = id => document.getElementById(id);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const icon = name => `<svg class="i"><use href="#${name}"/></svg>`;
+const sumOf = list => list.reduce((s, e) => s + e.amount, 0);
 function pad(n) { return String(n).padStart(2, '0'); }
 function monthKey(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1); }
+function shiftKey(key, delta) { const [y, m] = key.split('-').map(Number); return monthKey(new Date(y, m - 1 + delta, 1)); }
+function daysIn(key) { const [y, m] = key.split('-').map(Number); return new Date(y, m, 0).getDate(); }
 function today() { const d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
 function money(n) {
   const s = n.toLocaleString('uk-UA', { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 });
@@ -70,14 +89,105 @@ function money(n) {
 }
 function catById(id) { return state.cats.find(c => c.id === id) || { emoji: '❔', name: 'Без категорії', color: '#9ca3af' }; }
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]); }
-function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 1800); }
 
-function monthExpenses() { return state.expenses.filter(e => e.date.startsWith(viewMonth)); }
+// Toast with an optional action button (used for "undo")
+function toast(msg, action) {
+  const t = $('toast'), btn = $('toastBtn');
+  $('toastMsg').textContent = msg;
+  btn.hidden = !action;
+  if (action) {
+    btn.textContent = action.label;
+    btn.onclick = () => { action.fn(); t.classList.remove('show'); };
+  }
+  t.classList.toggle('actionable', !!action);
+  t.classList.add('show');
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => t.classList.remove('show'), action ? 5000 : 1800);
+}
+
+function monthExpenses(key = viewMonth) { return state.expenses.filter(e => e.date.startsWith(key)); }
+// Previous month's expenses for a fair comparison: for the current month only up to today's day
+function prevPeriod() {
+  const upTo = viewMonth === monthKey(new Date()) ? new Date().getDate() : 31;
+  return monthExpenses(shiftKey(viewMonth, -1)).filter(e => Number(e.date.slice(8)) <= upTo);
+}
 
 function shiftMonth(delta) {
-  const [y, m] = viewMonth.split('-').map(Number);
-  viewMonth = monthKey(new Date(y, m - 1 + delta, 1));
+  viewMonth = shiftKey(viewMonth, delta);
   render();
+}
+
+// ---------- Photo storage (IndexedDB — photos are too big for localStorage) ----------
+let dbPromise;
+function photoDb() {
+  return dbPromise ||= new Promise((res, rej) => {
+    const r = indexedDB.open('expense-tracker', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('photos');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function photoStore(mode, fn) {
+  const db = await photoDb();
+  return new Promise((res, rej) => {
+    const tx = db.transaction('photos', mode);
+    const req = fn(tx.objectStore('photos'));
+    tx.oncomplete = () => res(req.result);
+    tx.onerror = () => rej(tx.error);
+  });
+}
+const photoGet = id => photoStore('readonly', s => s.get(id));
+const photoPut = (id, blob) => photoStore('readwrite', s => s.put(blob, id));
+const photoDel = id => photoStore('readwrite', s => s.delete(id));
+const photoClear = () => photoStore('readwrite', s => s.clear());
+const photoKeys = () => photoStore('readonly', s => s.getAllKeys());
+
+async function cleanupPhotos() {
+  try {
+    const used = new Set(state.expenses.filter(e => e.photo).map(e => e.id));
+    for (const k of await photoKeys()) if (!used.has(k)) await photoDel(k);
+  } catch {}
+}
+function loadImg(src) {
+  return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
+}
+// Downscale to ~1280px JPEG so a receipt photo takes ~150 KB instead of several MB
+async function shrinkImage(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await loadImg(url);
+    const k = Math.min(1, 1280 / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * k);
+    c.height = Math.round(img.naturalHeight * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return await new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(), 'image/jpeg', 0.75));
+  } finally { URL.revokeObjectURL(url); }
+}
+const blobToDataUrl = b => new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(b); });
+function dataUrlToBlob(url) {
+  const [head, data] = url.split(',');
+  return new Blob([Uint8Array.from(atob(data), c => c.charCodeAt(0))], { type: head.slice(5, head.indexOf(';')) });
+}
+
+// ---------- Recurring payments ----------
+// Adds any monthly payments that came due since they were last added (catches up missed months).
+function applyRecurring() {
+  const now = new Date(), cur = monthKey(now);
+  let added = 0;
+  state.recurring.forEach(r => {
+    for (let m = shiftKey(r.last, 1), guard = 0; m <= cur && guard < 36; m = shiftKey(m, 1), guard++) {
+      const day = Math.min(r.day, daysIn(m));
+      if (m === cur && now.getDate() < day) break;
+      state.expenses.push({ id: uid(), ts: Date.now(), amount: r.amount, cat: r.cat, note: r.note, date: `${m}-${pad(day)}`, rec: r.id });
+      r.last = m;
+      added++;
+    }
+  });
+  if (added) {
+    save();
+    toast(`Додано регулярних платежів: ${added}`);
+  }
 }
 
 // ---------- Rendering ----------
@@ -90,15 +200,13 @@ function render() {
 
 function renderHome() {
   const list = monthExpenses();
-  const total = list.reduce((s, e) => s + e.amount, 0);
+  const total = sumOf(list);
   const [y, m] = viewMonth.split('-').map(Number);
-  const monthName = new Date(y, m - 1, 1).toLocaleDateString('uk-UA', { month: 'long' });
-  $('heroLabel').textContent = 'Витрачено за ' + monthName;
+  $('heroLabel').textContent = 'Витрачено за ' + new Date(y, m - 1, 1).toLocaleDateString('uk-UA', { month: 'long' });
   $('total').textContent = money(total);
 
-  const daysInMonth = new Date(y, m, 0).getDate();
   const isCurrent = viewMonth === monthKey(new Date());
-  const daysPassed = isCurrent ? new Date().getDate() : daysInMonth;
+  const daysPassed = isCurrent ? new Date().getDate() : daysIn(viewMonth);
   $('sCount').textContent = list.length;
   $('sCountLbl').textContent = plural(list.length, 'запис', 'записи', 'записів');
   $('sDay').textContent = money(Math.round(total / daysPassed));
@@ -117,38 +225,69 @@ function renderHome() {
     $('budgetBar').hidden = true;
   }
 
+  // Forecast and comparison with the previous month
+  const pills = [];
+  if (isCurrent && total > 0) pills.push(`Прогноз ~${money(Math.round(forecast() / 10) * 10)}`);
+  const prevTotal = sumOf(prevPeriod());
+  if (prevTotal && total) {
+    const p = Math.round((total - prevTotal) / prevTotal * 100);
+    const prevName = MONTH_GEN[Number(shiftKey(viewMonth, -1).slice(5)) - 1];
+    pills.push(p === 0 ? `Як до ${prevName}` : `${p > 0 ? '↑' : '↓'} ${Math.abs(p)}% до ${prevName}`);
+  }
+  $('heroMeta').innerHTML = pills.map(p => `<span class="pill">${esc(p)}</span>`).join('');
+  $('heroMeta').hidden = !pills.length;
+
+  renderQuick();
+
   if (!list.length) {
     $('days').innerHTML = emptyState('i-coins', 'Поки що порожньо', 'Натисніть «+» внизу, щоб додати першу витрату');
     return;
   }
   const byDay = {};
   list.sort((a, b) => b.date.localeCompare(a.date) || b.ts - a.ts).forEach(e => (byDay[e.date] ||= []).push(e));
-  $('days').innerHTML = Object.entries(byDay).map(([date, items]) => {
-    const sum = items.reduce((s, e) => s + e.amount, 0);
-    return `<div class="day">
-      <div class="day-head"><span>${esc(dayLabel(date))}</span><span>${esc(money(sum))}</span></div>
+  $('days').innerHTML = Object.entries(byDay).map(([date, items]) => `<div class="day">
+      <div class="day-head"><span>${esc(dayLabel(date))}</span><span>${esc(money(sumOf(items)))}</span></div>
       <div class="list">${items.map(e => {
         const c = catById(e.cat);
+        const flags = (e.rec ? icon('i-repeat') : '') + (e.photo ? icon('i-camera') : '');
         return `<button class="item" data-id="${esc(e.id)}">
           <div class="emoji" style="background:${c.color}22">${esc(c.emoji)}</div>
-          <div class="meta"><div class="name">${esc(c.name)}</div>${e.note ? `<div class="note">${esc(e.note)}</div>` : ''}</div>
+          <div class="meta"><div class="name">${esc(c.name)}</div>${flags || e.note ? `<div class="note">${flags}${esc(e.note)}</div>` : ''}</div>
           <div class="amt">−${esc(money(e.amount))}</div>
         </button>`;
       }).join('')}</div>
-    </div>`;
-  }).join('');
+    </div>`).join('');
+}
+
+// Day-to-day spending extrapolated to the whole month, plus fixed monthly payments
+function forecast() {
+  const list = monthExpenses();
+  const recurringDone = sumOf(list.filter(e => e.rec));
+  const variable = sumOf(list) - recurringDone;
+  const recurringPending = sumOf(state.recurring.filter(r => r.last < viewMonth));
+  return variable / new Date().getDate() * daysIn(viewMonth) + recurringDone + recurringPending;
+}
+
+function renderQuick() {
+  $('quick').innerHTML = state.favs.map(f => {
+    const c = catById(f.cat);
+    return `<button class="chip" data-fav="${esc(f.id)}"><span>${esc(c.emoji)}</span>${esc(f.note || c.name)}<b>${esc(money(f.amount))}</b></button>`;
+  }).join('') + `<button class="chip add" data-fav-new>${state.favs.length ? '+' : '+ Швидка кнопка'}</button>`;
 }
 
 function renderStats() {
+  renderTrend();
+  renderRecurring();
   const list = monthExpenses();
-  const total = list.reduce((s, e) => s + e.amount, 0);
+  const total = sumOf(list);
   if (!total) {
     $('donut').innerHTML = '';
     $('statList').innerHTML = emptyState('i-pie', 'Немає даних', 'Тут зʼявиться розподіл витрат по категоріях');
     return;
   }
-  const sums = {};
+  const sums = {}, prevSums = {};
   list.forEach(e => sums[e.cat] = (sums[e.cat] || 0) + e.amount);
+  prevPeriod().forEach(e => prevSums[e.cat] = (prevSums[e.cat] || 0) + e.amount);
   const rows = Object.entries(sums).sort((a, b) => b[1] - a[1]);
 
   // Donut chart
@@ -156,25 +295,70 @@ function renderStats() {
   let offset = 0;
   const arcs = rows.map(([id, v]) => {
     const len = v / total * C;
-    const seg = `<circle r="${R}" cx="100" cy="100" fill="none" stroke="${catById(id).color}" stroke-width="20" stroke-linecap="butt"
+    const seg = `<circle r="${R}" cx="100" cy="100" fill="none" stroke="${catById(id).color}" stroke-width="20"
       stroke-dasharray="${Math.max(len - (rows.length > 1 ? 3 : 0), 0.5)} ${C}" stroke-dashoffset="${-offset}" transform="rotate(-90 100 100)"/>`;
     offset += len;
     return seg;
   }).join('');
   $('donut').innerHTML = `<svg width="200" height="200" viewBox="0 0 200 200">${arcs}
-    <text x="100" y="94" text-anchor="middle" font-size="13" fill="var(--muted)">Разом</text>
-    <text x="100" y="118" text-anchor="middle" font-size="20" font-weight="750" fill="var(--text)">${esc(money(Math.round(total)))}</text></svg>`;
+    <text x="100" y="94" text-anchor="middle" class="donut-t1">Разом</text>
+    <text x="100" y="118" text-anchor="middle" class="donut-t2">${esc(money(Math.round(total)))}</text></svg>`;
 
   $('statList').innerHTML = rows.map(([id, v]) => {
     const c = catById(id), p = v / total * 100;
     return `<div class="stat-row">
       <div class="emoji" style="background:${c.color}22">${esc(c.emoji)}</div>
       <div class="meta">
-        <div class="top"><span class="name">${esc(c.name)}<span class="pct">${p.toFixed(0)}%</span></span><b>${esc(money(v))}</b></div>
+        <div class="top"><span class="name">${esc(c.name)}<span class="pct">${p.toFixed(0)}%</span>${delta(v, prevSums[id])}</span><b>${esc(money(v))}</b></div>
         <div class="bar"><i style="width:${p}%;background:${c.color}"></i></div>
       </div>
     </div>`;
   }).join('');
+}
+function delta(cur, prev) {
+  if (!prev) return '';
+  const p = Math.round((cur - prev) / prev * 100);
+  return p ? `<span class="delta ${p > 0 ? 'up' : 'down'}">${p > 0 ? '↑' : '↓'}${Math.abs(p)}%</span>` : '';
+}
+
+// Bar chart of the 12 months ending with the selected one; tap a bar to open that month
+function renderTrend() {
+  const months = Array.from({ length: 12 }, (_, i) => shiftKey(viewMonth, i - 11));
+  const totals = months.map(k => sumOf(monthExpenses(k)));
+  const max = Math.max(...totals, 1);
+  const W = 336, H = 110, gap = 6, bw = (W - gap * 11) / 12;
+  const bars = months.map((k, i) => {
+    const h = totals[i] ? Math.max(totals[i] / max * H, 4) : 2;
+    const x = i * (bw + gap), on = k === viewMonth ? ' on' : '';
+    return `<g data-month="${k}"><rect x="${x}" y="0" width="${bw}" height="${H + 20}" fill="transparent"/>
+      <rect class="b${on}" x="${x}" y="${H - h}" width="${bw}" height="${h}" rx="4"/>
+      <text class="${on}" x="${x + bw / 2}" y="${H + 16}" text-anchor="middle">${MONTH_SHORT[Number(k.slice(5)) - 1]}</text></g>`;
+  }).join('');
+  const withData = totals.filter(Boolean);
+  const avg = withData.length ? withData.reduce((a, b) => a + b, 0) / withData.length : 0;
+  $('trend').innerHTML = `<div class="card-head"><b>За рік</b><span>${avg ? 'у середньому ' + esc(money(Math.round(avg))) + '/міс' : ''}</span></div>
+    <svg class="trend" viewBox="0 0 ${W} ${H + 20}" width="100%">${bars}</svg>`;
+}
+
+function renderRecurring() {
+  const rs = state.recurring;
+  if (!rs.length) {
+    $('recList').innerHTML = `<div class="card-head"><b>Регулярні платежі</b></div>
+      <p class="muted-p">Увімкніть «Повторювати щомісяця» при додаванні витрати — оренда, звʼязок і підписки додаватимуться самі.</p>`;
+    return;
+  }
+  const monthly = sumOf(rs);
+  $('recList').innerHTML = `<div class="card-head"><b>Регулярні платежі</b><span>${esc(money(monthly))}/міс</span></div>` +
+    rs.map(r => {
+      const c = catById(r.cat);
+      return `<div class="stat-row">
+        <div class="emoji" style="background:${c.color}22">${esc(c.emoji)}</div>
+        <div class="meta"><div class="top"><span class="name">${esc(r.note || c.name)}</span><b>${esc(money(r.amount))}</b></div>
+          <div class="sub2">${r.day} числа щомісяця · ${esc(money(r.amount * 12))} на рік</div></div>
+        <button class="icon-sm" data-del-rec="${esc(r.id)}" aria-label="Видалити платіж">${icon('i-trash')}</button>
+      </div>`;
+    }).join('') +
+    `<div class="rec-total">На рік це <b>${esc(money(monthly * 12))}</b></div>`;
 }
 
 function renderSettings() {
@@ -183,13 +367,21 @@ function renderSettings() {
   $('catEditList').innerHTML = state.cats.map(c => `<div class="cat-edit">
     <div class="emoji" style="background:${c.color}22">${esc(c.emoji)}</div>
     <div class="nm">${esc(c.name)}</div>
-    <button data-del-cat="${esc(c.id)}" aria-label="Видалити категорію"><svg class="i"><use href="#i-trash"/></svg></button>
+    <button data-del-cat="${esc(c.id)}" aria-label="Видалити категорію">${icon('i-trash')}</button>
   </div>`).join('');
+  $('favEditList').innerHTML = state.favs.length ? state.favs.map(f => {
+    const c = catById(f.cat);
+    return `<div class="cat-edit">
+      <div class="emoji" style="background:${c.color}22">${esc(c.emoji)}</div>
+      <div class="nm">${esc(f.note || c.name)} · ${esc(money(f.amount))}</div>
+      <button data-del-fav="${esc(f.id)}" aria-label="Видалити кнопку">${icon('i-trash')}</button>
+    </div>`;
+  }).join('') : `<p class="muted-p" style="padding:16px 4px">Поки немає. Увімкніть «Швидка кнопка» у формі витрати.</p>`;
   renderLockToggle();
 }
 
-function emptyState(icon, title, text) {
-  return `<div class="empty"><div class="ico"><svg class="i"><use href="#${icon}"/></svg></div><b>${esc(title)}</b>${esc(text)}</div>`;
+function emptyState(name, title, text) {
+  return `<div class="empty"><div class="ico">${icon(name)}</div><b>${esc(title)}</b>${esc(text)}</div>`;
 }
 
 function dayLabel(date) {
@@ -208,7 +400,10 @@ function plural(n, one, few, many) {
 }
 
 // ---------- Add / edit sheet ----------
-function openSheet(exp) {
+let sheetPhoto = { blob: null, changed: false, url: null };
+const findFav = x => state.favs.find(f => f.amount === x.amount && f.cat === x.cat && f.note === x.note);
+
+function openSheet(exp, opts = {}) {
   editingId = exp ? exp.id : null;
   $('sheetTitle').textContent = exp ? 'Редагувати' : 'Нова витрата';
   $('fAmount').value = exp ? String(exp.amount).replace('.', ',') : '';
@@ -218,8 +413,13 @@ function openSheet(exp) {
   $('fDate').value = exp ? exp.date : defaultDate;
   $('fCur').textContent = state.settings.currency;
   selectedCat = exp ? exp.cat : (state.lastCat && state.cats.some(c => c.id === state.lastCat) ? state.lastCat : state.cats[0]?.id);
+  $('tFav').checked = !!opts.fav || (exp ? !!findFav(exp) : false);
+  $('tRep').checked = !!(exp?.rec && state.recurring.some(r => r.id === exp.rec));
   $('del').hidden = !exp;
+  setSheetPhoto(null, false);
+  if (exp?.photo) photoGet(exp.id).then(b => { if (b && editingId === exp.id) setSheetPhoto(b, false); }).catch(() => {});
   renderCatPicker();
+  renderSuggest();
   $('backdrop').classList.add('open');
   $('sheet').classList.add('open');
   if (!exp) setTimeout(() => $('fAmount').focus(), 260);
@@ -236,22 +436,99 @@ function renderCatPicker() {
     <span class="e">${esc(c.emoji)}</span><span class="t">${esc(c.name)}</span></button>`).join('');
 }
 
-function submit() {
+function setSheetPhoto(blob, changed) {
+  if (sheetPhoto.url) URL.revokeObjectURL(sheetPhoto.url);
+  sheetPhoto = { blob, changed, url: blob ? URL.createObjectURL(blob) : null };
+  $('photoBox').innerHTML = blob
+    ? `<div class="photo-has"><button class="v" data-photo="view"><img src="${sheetPhoto.url}" alt="">Чек</button>
+        <button class="icon-sm" data-photo="remove" aria-label="Прибрати фото">${icon('i-x')}</button></div>`
+    : `<label class="photo-btn" for="photoInput">${icon('i-camera')}Фото чека</label>`;
+}
+
+// Past comments as one-tap suggestions; picking one also sets its category (and amount, if empty)
+function renderSuggest() {
+  const q = $('fNote').value.trim().toLowerCase();
+  const stats = new Map();
+  state.expenses.forEach(e => {
+    if (!e.note) return;
+    const k = e.note.toLowerCase();
+    const s = stats.get(k) || { n: 0, ts: '' };
+    s.n++;
+    const ts = e.date + String(e.ts).padStart(15, '0'); // most recent by date, then by entry time
+    if (ts >= s.ts) Object.assign(s, { ts, note: e.note, cat: e.cat, amount: e.amount });
+    stats.set(k, s);
+  });
+  const items = [...stats.entries()]
+    .filter(([k]) => k !== q && k.includes(q))
+    .sort(([ka, a], [kb, b]) => kb.startsWith(q) - ka.startsWith(q) || b.n - a.n || b.ts.localeCompare(a.ts))
+    .slice(0, 6).map(([, s]) => s);
+  $('suggest').innerHTML = items.map(s => `<button class="sg" data-note="${esc(s.note)}" data-cat="${esc(s.cat)}" data-amount="${s.amount}">${esc(catById(s.cat).emoji)} ${esc(s.note)}</button>`).join('');
+  $('suggest').hidden = !items.length;
+}
+
+let saving = false;
+async function submit() {
+  if (saving) return;
   const amount = Math.round(parseFloat($('fAmount').value.replace(/\s/g, '').replace(',', '.')) * 100) / 100;
   if (!(amount > 0)) { toast('Введіть суму'); $('fAmount').focus(); return; }
   if (!selectedCat) { toast('Оберіть категорію'); return; }
-  const data = { amount, cat: selectedCat, note: $('fNote').value.trim(), date: $('fDate').value || today() };
-  if (editingId) {
-    Object.assign(state.expenses.find(e => e.id === editingId), data);
+  saving = true;
+  const wasEditing = !!editingId;
+  const data = { amount, cat: selectedCat, note: $('fNote').value.trim(), date: DATE_RE.test($('fDate').value) ? $('fDate').value : today() };
+  let exp;
+  if (wasEditing) {
+    exp = state.expenses.find(e => e.id === editingId);
+    Object.assign(exp, data);
   } else {
-    state.expenses.push({ id: uid(), ts: Date.now(), ...data });
+    exp = { id: uid(), ts: Date.now(), ...data };
+    state.expenses.push(exp);
   }
+
+  const fav = findFav(exp);
+  if ($('tFav').checked && !fav) state.favs.push({ id: uid(), amount: exp.amount, cat: exp.cat, note: exp.note });
+  if (!$('tFav').checked && fav) state.favs = state.favs.filter(f => f !== fav);
+
+  const rule = exp.rec && state.recurring.find(r => r.id === exp.rec);
+  const day = Number(exp.date.slice(8));
+  if ($('tRep').checked) {
+    if (rule) Object.assign(rule, { amount: exp.amount, cat: exp.cat, note: exp.note, day });
+    else {
+      const r = { id: uid(), amount: exp.amount, cat: exp.cat, note: exp.note, day, last: exp.date.slice(0, 7) };
+      state.recurring.push(r);
+      exp.rec = r.id;
+    }
+  } else if (rule) {
+    state.recurring = state.recurring.filter(r => r !== rule);
+    delete exp.rec;
+  }
+
+  if (sheetPhoto.changed) {
+    try {
+      if (sheetPhoto.blob) { await photoPut(exp.id, sheetPhoto.blob); exp.photo = true; }
+      else { await photoDel(exp.id); delete exp.photo; }
+    } catch { toast('Не вдалося зберегти фото'); }
+  }
+
   state.lastCat = selectedCat;
   save();
+  applyRecurring();
   viewMonth = data.date.slice(0, 7);
   closeSheet();
   render();
-  toast(editingId ? 'Збережено' : 'Додано ✓');
+  saving = false;
+  toast(wasEditing ? 'Збережено' : 'Додано ✓');
+}
+
+function addFromFav(f) {
+  const exp = { id: uid(), ts: Date.now(), amount: f.amount, cat: f.cat, note: f.note, date: today() };
+  state.expenses.push(exp);
+  save();
+  viewMonth = monthKey(new Date());
+  render();
+  toast(`Додано: ${f.note || catById(f.cat).name}, ${money(f.amount)}`, {
+    label: 'Скасувати',
+    fn: () => { state.expenses = state.expenses.filter(e => e.id !== exp.id); save(); render(); },
+  });
 }
 
 // ---------- Export / import ----------
@@ -280,18 +557,64 @@ $('save').onclick = submit;
 $('fAmount').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
 $('fAmount').addEventListener('input', fitAmount);
 $('fNote').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+$('fNote').addEventListener('input', renderSuggest);
 $('fCats').onclick = e => {
   const b = e.target.closest('[data-cat]');
   if (b) { selectedCat = b.dataset.cat; renderCatPicker(); }
 };
+$('suggest').onclick = e => {
+  const b = e.target.closest('[data-note]');
+  if (!b) return;
+  $('fNote').value = b.dataset.note;
+  if (state.cats.some(c => c.id === b.dataset.cat)) { selectedCat = b.dataset.cat; renderCatPicker(); }
+  if (!$('fAmount').value) { $('fAmount').value = b.dataset.amount.replace('.', ','); fitAmount(); }
+  renderSuggest();
+};
+$('photoInput').onchange = async e => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try { setSheetPhoto(await shrinkImage(file), true); }
+  catch { toast('Не вдалося відкрити фото'); }
+};
+$('photoBox').onclick = e => {
+  const act = e.target.closest('[data-photo]')?.dataset.photo;
+  if (act === 'view') { $('viewerImg').src = sheetPhoto.url; $('viewer').hidden = false; }
+  if (act === 'remove') setSheetPhoto(null, true);
+};
+$('viewer').onclick = () => { $('viewer').hidden = true; };
 $('days').onclick = e => {
   const b = e.target.closest('[data-id]');
   if (b) openSheet(state.expenses.find(x => x.id === b.dataset.id));
 };
+$('quick').onclick = e => {
+  const b = e.target.closest('[data-fav]');
+  if (b) { const f = state.favs.find(x => x.id === b.dataset.fav); if (f) addFromFav(f); }
+  else if (e.target.closest('[data-fav-new]')) openSheet(null, { fav: true });
+};
+// Delete with undo: the expense (and its photo) can be restored for a few seconds
 $('del').onclick = () => {
-  if (!confirm('Видалити цю витрату?')) return;
-  state.expenses = state.expenses.filter(e => e.id !== editingId);
-  save(); closeSheet(); render(); toast('Видалено');
+  const i = state.expenses.findIndex(e => e.id === editingId);
+  if (i < 0) return;
+  const [exp] = state.expenses.splice(i, 1);
+  save(); closeSheet(); render();
+  const purge = setTimeout(() => { if (exp.photo) photoDel(exp.id).catch(() => {}); }, 6000);
+  toast('Витрату видалено', {
+    label: 'Повернути',
+    fn: () => { clearTimeout(purge); state.expenses.push(exp); save(); render(); },
+  });
+};
+$('trend').onclick = e => {
+  const g = e.target.closest('[data-month]');
+  if (g) { viewMonth = g.dataset.month; render(); }
+};
+$('recList').onclick = e => {
+  const b = e.target.closest('[data-del-rec]');
+  if (!b) return;
+  const r = state.recurring.find(x => x.id === b.dataset.delRec);
+  if (!r || !confirm(`Більше не додавати «${r.note || catById(r.cat).name}» щомісяця? Уже додані записи залишаться.`)) return;
+  state.recurring = state.recurring.filter(x => x !== r);
+  save(); render();
 };
 
 // ---------- Navigation ----------
@@ -319,6 +642,67 @@ function updateLeftBtn() {
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => showView(t.dataset.view));
 $('settingsBtn').onclick = () => showView('settings');
 $('leftBtn').onclick = () => currentView === 'settings' ? showView(lastTab) : lock();
+
+$('budget').onchange = () => { state.settings.budget = Math.max(0, Number($('budget').value) || 0); save(); render(); };
+$('currency').onchange = () => { state.settings.currency = $('currency').value; save(); render(); };
+
+$('addCat').onclick = () => {
+  const name = $('newCatName').value.trim();
+  if (!name) { toast('Введіть назву'); return; }
+  state.cats.push({ id: uid(), emoji: $('newCatEmoji').value.trim() || '🏷️', name, color: PALETTE[state.cats.length % PALETTE.length] });
+  $('newCatName').value = ''; $('newCatEmoji').value = '';
+  save(); renderSettings(); toast('Категорію додано');
+};
+$('catEditList').onclick = e => {
+  const b = e.target.closest('[data-del-cat]');
+  if (!b) return;
+  const id = b.dataset.delCat;
+  const used = state.expenses.filter(x => x.cat === id).length;
+  if (state.cats.length <= 1) { toast('Потрібна хоча б одна категорія'); return; }
+  if (used && !confirm(`Ця категорія використана в ${used} записах. Вони залишаться, але без категорії. Видалити?`)) return;
+  state.cats = state.cats.filter(c => c.id !== id);
+  save(); renderSettings(); render();
+};
+$('favEditList').onclick = e => {
+  const b = e.target.closest('[data-del-fav]');
+  if (!b) return;
+  state.favs = state.favs.filter(f => f.id !== b.dataset.delFav);
+  save(); renderSettings(); render();
+};
+
+$('exportJson').onclick = async () => {
+  const photos = {};
+  try {
+    for (const e of state.expenses) if (e.photo) { const b = await photoGet(e.id); if (b) photos[e.id] = await blobToDataUrl(b); }
+  } catch {}
+  download(`vytraty-backup-${today()}.json`, JSON.stringify({ ...state, photos }, null, 2), 'application/json');
+};
+$('exportCsv').onclick = exportCsv;
+$('importFile').onchange = async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const raw = JSON.parse(await file.text());
+    const data = sanitize(raw);
+    if (!data) throw 0;
+    if (confirm(`Відновити ${data.expenses.length} записів? Поточні дані буде замінено.`)) {
+      const photos = raw.photos && typeof raw.photos === 'object' ? raw.photos : {};
+      await photoClear().catch(() => {});
+      for (const x of data.expenses) {
+        const p = Object.prototype.hasOwnProperty.call(photos, x.id) ? photos[x.id] : null;
+        if (typeof p === 'string' && PHOTO_RE.test(p)) { await photoPut(x.id, dataUrlToBlob(p)); x.photo = true; }
+        else delete x.photo;
+      }
+      state = data; save(); applyRecurring(); render(); renderSettings(); toast('Дані відновлено');
+    }
+  } catch { toast('Невірний файл'); }
+  finally { e.target.value = ''; }
+};
+$('wipe').onclick = async () => {
+  if (!confirm('Точно видалити ВСІ витрати й налаштування?')) return;
+  localStorage.removeItem(KEY); await photoClear().catch(() => {});
+  state = load(); save(); render(); renderSettings(); toast('Усе очищено');
+};
 
 // ---------- Fingerprint lock (WebAuthn platform authenticator) ----------
 // A screen lock, not encryption: it keeps people holding your unlocked phone out of the app.
@@ -357,7 +741,7 @@ function lock() {
   document.body.classList.add('locked');
   $('lock').hidden = false;
 }
-let unlocking = false;
+let unlocking = false, pendingAdd = false;
 // `auto` = prompted without a tap; some browsers refuse that, so stay quiet and wait for the button
 async function unlock(auto) {
   if (unlocking) return;
@@ -366,6 +750,7 @@ async function unlock(auto) {
     await verifyFingerprint();
     document.body.classList.remove('locked');
     $('lock').hidden = true;
+    if (pendingAdd) { pendingAdd = false; openSheet(); }
   } catch {
     if (!auto) toast('Не вдалося розпізнати');
   } finally { unlocking = false; }
@@ -375,13 +760,16 @@ $('lockReset').onclick = () => {
   if (!confirm('Без відбитка увійти не можна. Можна лише скинути додаток — це видалить УСІ витрати на цьому телефоні. Продовжити?')) return;
   if (!confirm('Точно? Відновити дані можна буде тільки з резервної копії.')) return;
   localStorage.removeItem(KEY); localStorage.removeItem(LOCK_KEY);
+  indexedDB.deleteDatabase('expense-tracker');
   location.reload();
 };
 
 let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) hiddenAt = Date.now();
-  else if (lockEnabled() && Date.now() - hiddenAt > RELOCK_AFTER_MS && $('lock').hidden) { lock(); unlock(true); }
+  if (document.hidden) { hiddenAt = Date.now(); return; }
+  applyRecurring();
+  render();
+  if (lockEnabled() && Date.now() - hiddenAt > RELOCK_AFTER_MS && $('lock').hidden) { lock(); unlock(true); }
 });
 
 async function renderLockToggle() {
@@ -410,51 +798,19 @@ $('lockToggle').onchange = async e => {
   renderLockToggle();
 };
 
-$('budget').onchange = () => { state.settings.budget = Math.max(0, Number($('budget').value) || 0); save(); render(); };
-$('currency').onchange = () => { state.settings.currency = $('currency').value; save(); render(); };
-
-$('addCat').onclick = () => {
-  const name = $('newCatName').value.trim();
-  if (!name) { toast('Введіть назву'); return; }
-  state.cats.push({ id: uid(), emoji: $('newCatEmoji').value.trim() || '🏷️', name, color: PALETTE[state.cats.length % PALETTE.length] });
-  $('newCatName').value = ''; $('newCatEmoji').value = '';
-  save(); renderSettings(); toast('Категорію додано');
-};
-$('catEditList').onclick = e => {
-  const b = e.target.closest('[data-del-cat]');
-  if (!b) return;
-  const id = b.dataset.delCat;
-  const used = state.expenses.filter(x => x.cat === id).length;
-  if (state.cats.length <= 1) { toast('Потрібна хоча б одна категорія'); return; }
-  if (used && !confirm(`Ця категорія використана в ${used} записах. Вони залишаться, але без категорії. Видалити?`)) return;
-  state.cats = state.cats.filter(c => c.id !== id);
-  save(); renderSettings(); render();
-};
-
-$('exportJson').onclick = () => download(`vytraty-backup-${today()}.json`, JSON.stringify(state, null, 2), 'application/json');
-$('exportCsv').onclick = exportCsv;
-$('importBtn').onclick = () => $('importFile').click();
-$('importFile').onchange = async e => {
-  const file = e.target.files[0];
-  if (!file) return;
-  try {
-    const data = sanitize(JSON.parse(await file.text()));
-    if (!data) throw 0;
-    if (confirm(`Відновити ${data.expenses.length} записів? Поточні дані буде замінено.`)) {
-      state = data; save(); render(); renderSettings(); toast('Дані відновлено');
-    }
-  } catch { toast('Невірний файл'); }
-  finally { e.target.value = ''; }
-};
-$('wipe').onclick = () => {
-  if (!confirm('Точно видалити ВСІ витрати й налаштування?')) return;
-  localStorage.removeItem(KEY); state = load(); save(); render(); renderSettings(); toast('Усе очищено');
-};
-
 // Ask the browser not to evict our data under storage pressure
 navigator.storage?.persist?.();
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js');
 
+// Home-screen shortcut "Додати витрату" opens the app with ?add=1
+if (new URLSearchParams(location.search).has('add')) {
+  pendingAdd = true;
+  history.replaceState(null, '', location.pathname);
+}
+
+applyRecurring();
 render();
 showView('home');
+cleanupPhotos();
 if (lockEnabled()) { lock(); unlock(true); }
+else if (pendingAdd) { pendingAdd = false; openSheet(); }
